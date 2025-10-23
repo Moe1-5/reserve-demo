@@ -84,3 +84,13 @@ temp/
 *.tar.gz
 *.zip
 *.tgz
+
+
+# Bun
+bun.lockb
+# npm
+package-lock.json
+# Yarn
+yarn.lock
+# pnpm
+pnpm-lock.yaml

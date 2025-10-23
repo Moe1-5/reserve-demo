@@ -125,6 +125,23 @@ export const setChairsForSelected = (chairs: number) => {
     });
 };
 
+export const setNameForSelected = (name: string) => {
+    demoStore.setState((prev: DemoState) => {
+        if (!prev.selectedId) {
+            return prev;
+        }
+
+        const normalized = name.trim() || "Table";
+
+        return {
+            ...prev,
+            tables: prev.tables.map((t) =>
+                t.id === prev.selectedId ? { ...t, name: normalized } : t
+            ),
+        };
+    });
+};
+
 export const deleteSelectedTable = () => {
     demoStore.setState((prev: DemoState) => {
         if (!prev.selectedId) {

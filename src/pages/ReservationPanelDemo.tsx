@@ -10,6 +10,7 @@ import {
   removeChairFromSelected,
   selectTable,
   setChairsForSelected,
+  setNameForSelected,
   updateTablePosition,
   type Table,
 } from "../lib/demoStore";
@@ -24,30 +25,25 @@ import {
 } from "lucide-react";
 
 const TABLE_SIZE = 96;
-const MIN_ZOOM = 0.6;
-const MAX_ZOOM = 1.6;
+const MIN_ZOOM = 0.2;
+const MAX_ZOOM = 2.5;
 const ZOOM_STEP = 0.1;
+const STORAGE_KEY = "neutro-reserve.canvas-state";
+const STORAGE_VERSION = 1;
 
-type CanvasBounds = {
-  left: number;
-  top: number;
-  right: number;
-  bottom: number;
-};
-
-function calculateCanvasBounds(
-  size: { width: number; height: number } | null,
-  scale: number
-): CanvasBounds | null {
-  if (!size) return null;
-  const maxX = Math.max(0, size.width / scale - TABLE_SIZE);
-  const maxY = Math.max(0, size.height / scale - TABLE_SIZE);
-  return {
-    left: 0,
-    top: 0,
-    right: maxX,
-    bottom: maxY,
-  };
+function isValidTable(value: unknown): value is Table {
+  if (!value || typeof value !== "object") {
+    return false;
+  }
+  const candidate = value as Record<string, unknown>;
+  return (
+    typeof candidate.id === "string" &&
+    typeof candidate.name === "string" &&
+    typeof candidate.x === "number" &&
+    typeof candidate.y === "number" &&
+    typeof candidate.color === "string" &&
+    typeof candidate.chairs === "number"
+  );
 }
 
 export default function ReservationPanelDemo() {
@@ -58,7 +54,146 @@ export default function ReservationPanelDemo() {
   const [detailOpen, setDetailOpen] = React.useState(false);
   const [zoom, setZoom] = React.useState(1);
   const [canvasSize, setCanvasSize] = React.useState<{ width: number; height: number } | null>(null);
-  const [canvasBounds, setCanvasBounds] = React.useState<CanvasBounds | null>(null);
+  const [pan, setPan] = React.useState({ x: 0, y: 0 });
+  const [isPanning, setIsPanning] = React.useState(false);
+  const interactionLayerRef = React.useRef<HTMLDivElement>(null);
+  const hasHydratedRef = React.useRef(false);
+
+  const zoomRef = React.useRef(zoom);
+  const panRef = React.useRef(pan);
+  const canvasSizeRef = React.useRef(canvasSize);
+  const activePointersRef = React.useRef<Map<number, { x: number; y: number }>>(new Map());
+  const pinchStateRef = React.useRef<{
+    distance: number;
+    midpoint: { x: number; y: number };
+    zoom: number;
+    pan: { x: number; y: number };
+  } | null>(null);
+  const isPanningRef = React.useRef(false);
+  const pointerTypeRef = React.useRef<string | null>(null);
+  const lastPanPointRef = React.useRef<{ x: number; y: number } | null>(null);
+
+  React.useEffect(() => {
+    zoomRef.current = zoom;
+  }, [zoom]);
+
+  React.useEffect(() => {
+    panRef.current = pan;
+  }, [pan]);
+
+  React.useEffect(() => {
+    canvasSizeRef.current = canvasSize;
+  }, [canvasSize]);
+
+  const setPanState = React.useCallback(
+    (
+      updater:
+        | { x: number; y: number }
+        | ((current: { x: number; y: number }) => { x: number; y: number })
+    ) => {
+      setPan((prev) => {
+        const nextValue = typeof updater === "function" ? updater(prev) : updater;
+        if (nextValue.x === prev.x && nextValue.y === prev.y) {
+          panRef.current = prev;
+          return prev;
+        }
+        panRef.current = nextValue;
+        return nextValue;
+      });
+    },
+    []
+  );
+
+  React.useEffect(() => {
+    if (typeof window === "undefined") {
+      return;
+    }
+
+    try {
+      const raw = window.localStorage.getItem(STORAGE_KEY);
+      if (!raw) {
+        hasHydratedRef.current = true;
+        return;
+      }
+
+      const parsed = JSON.parse(raw) as {
+        version?: unknown;
+        tables?: unknown;
+        selectedId?: unknown;
+        pan?: unknown;
+        zoom?: unknown;
+      };
+
+      if (parsed.version !== STORAGE_VERSION) {
+        hasHydratedRef.current = true;
+        return;
+      }
+
+      const storedTables = Array.isArray(parsed.tables)
+        ? parsed.tables.filter(isValidTable)
+        : [];
+
+      if (storedTables.length > 0) {
+        const persistedSelected =
+          typeof parsed.selectedId === "string" &&
+          storedTables.some((table) => table.id === parsed.selectedId)
+            ? parsed.selectedId
+            : storedTables[0]?.id ?? null;
+
+        demoStore.setState((prev) => ({
+          ...prev,
+          tables: storedTables,
+          selectedId: persistedSelected,
+        }));
+      }
+
+      if (
+        parsed.pan &&
+        typeof parsed.pan === "object" &&
+        typeof (parsed.pan as { x?: unknown }).x === "number" &&
+        typeof (parsed.pan as { y?: unknown }).y === "number"
+      ) {
+        const storedPan = {
+          x: (parsed.pan as { x: number }).x,
+          y: (parsed.pan as { y: number }).y,
+        };
+        setPanState(storedPan);
+      }
+
+      if (typeof parsed.zoom === "number") {
+        const normalizedZoom = Math.min(
+          MAX_ZOOM,
+          Math.max(MIN_ZOOM, parsed.zoom)
+        );
+        zoomRef.current = normalizedZoom;
+        setZoom(normalizedZoom);
+      }
+    } catch {
+      // ignore malformed storage
+    } finally {
+      hasHydratedRef.current = true;
+    }
+  }, [setPanState]);
+
+  React.useEffect(() => {
+    if (typeof window === "undefined" || !hasHydratedRef.current) {
+      return;
+    }
+
+    const payload = {
+      version: STORAGE_VERSION,
+      tables,
+      selectedId,
+      pan,
+      zoom,
+    };
+
+    try {
+      window.localStorage.setItem(STORAGE_KEY, JSON.stringify(payload));
+    } catch {
+      // ignore write errors (e.g., private mode)
+    }
+  }, [tables, selectedId, pan, zoom]);
 
   React.useEffect(() => {
     if (typeof window === "undefined") {
@@ -96,65 +231,306 @@ export default function ReservationPanelDemo() {
     };
   }, [sidebarOpen]);
 
-  React.useEffect(() => {
-    const bounds = calculateCanvasBounds(canvasSize, zoom);
-    setCanvasBounds(bounds);
+  const clampZoom = React.useCallback((value: number) => {
+    return Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, value));
+  }, []);
 
-    if (!bounds) {
-      return;
-    }
+  const applyZoom = React.useCallback(
+    (nextZoom: number, focusPoint?: { x: number; y: number }) => {
+      const size = canvasSizeRef.current;
+      const currentZoom = zoomRef.current;
+      const clampedZoom = clampZoom(Math.round(nextZoom * 100) / 100);
 
-    demoStore.setState((prev) => {
-      let changed = false;
-
-      const tablesWithinBounds = prev.tables.map((table) => {
-        const x = Math.min(Math.max(bounds.left, table.x), bounds.right);
-        const y = Math.min(Math.max(bounds.top, table.y), bounds.bottom);
-
-        if (x !== table.x || y !== table.y) {
-          changed = true;
-          return { ...table, x, y };
-        }
-
-        return table;
-      });
-
-      if (!changed) {
-        return prev;
+      if (!size) {
+        zoomRef.current = clampedZoom;
+        setZoom((prev) => (prev === clampedZoom ? prev : clampedZoom));
+        setPanState({ x: 0, y: 0 });
+        return;
       }
 
-      return {
-        ...prev,
-        tables: tablesWithinBounds,
+      const focus =
+        focusPoint ?? {
+          x: size.width / 2,
+          y: size.height / 2,
+        };
+
+      const currentPan = panRef.current;
+      const canvasPoint = {
+        x: focus.x / currentZoom - currentPan.x,
+        y: focus.y / currentZoom - currentPan.y,
       };
-    });
-  }, [canvasSize, zoom]);
+
+      const panRaw = {
+        x: focus.x / clampedZoom - canvasPoint.x,
+        y: focus.y / clampedZoom - canvasPoint.y,
+      };
+
+      zoomRef.current = clampedZoom;
+      setZoom((prev) => (prev === clampedZoom ? prev : clampedZoom));
+      setPanState(() => panRaw);
+    },
+    [clampZoom, setPanState]
+  );
 
   const handleZoomIn = React.useCallback(() => {
-    setZoom((prev) => {
-      const next = Math.min(MAX_ZOOM, prev + ZOOM_STEP);
-      return Math.round(next * 100) / 100;
-    });
-  }, []);
+    applyZoom(zoomRef.current + ZOOM_STEP);
+  }, [applyZoom]);
 
   const handleZoomOut = React.useCallback(() => {
-    setZoom((prev) => {
-      const next = Math.max(MIN_ZOOM, prev - ZOOM_STEP);
-      return Math.round(next * 100) / 100;
-    });
-  }, []);
+    applyZoom(zoomRef.current - ZOOM_STEP);
+  }, [applyZoom]);
 
   const handleZoomReset = React.useCallback(() => {
-    setZoom(1);
-  }, []);
+    applyZoom(1);
+  }, [applyZoom]);
+
+  const getCanvasPoint = React.useCallback(
+    (clientX: number, clientY: number) => {
+      const canvas = canvasRef.current;
+      if (!canvas) {
+        return { x: clientX, y: clientY };
+      }
+      const rect = canvas.getBoundingClientRect();
+      return {
+        x: clientX - rect.left,
+        y: clientY - rect.top,
+      };
+    },
+    []
+  );
+
+  const handleCanvasWheel = React.useCallback(
+    (event: WheelEvent) => {
+      event.preventDefault();
+
+      const ctrlLike = event.ctrlKey || event.metaKey;
+
+      if (ctrlLike) {
+        const focus = getCanvasPoint(event.clientX, event.clientY);
+        const delta = -event.deltaY * 0.002;
+        if (delta !== 0) {
+          applyZoom(zoomRef.current * (1 + delta), focus);
+        }
+        return;
+      }
+
+      const { deltaX, deltaY } = event;
+      if (deltaX === 0 && deltaY === 0) {
+        return;
+      }
+
+      setPanState((prev) => ({
+        x: prev.x - deltaX,
+        y: prev.y - deltaY,
+      }));
+    },
+    [applyZoom, getCanvasPoint, setPanState]
+  );
+
+  React.useEffect(() => {
+    const node = interactionLayerRef.current;
+    if (!node) return;
+
+    const listener = (event: WheelEvent) => {
+      handleCanvasWheel(event);
+    };
+
+    node.addEventListener("wheel", listener, { passive: false });
+
+    return () => {
+      node.removeEventListener("wheel", listener);
+    };
+  }, [handleCanvasWheel]);
+
+  const handleCanvasPointerDown = React.useCallback(
+    (event: React.PointerEvent<HTMLDivElement>) => {
+      const target = event.target as HTMLElement;
+      if (target.closest("[data-table-node='true']")) {
+        return;
+      }
+
+      if (event.pointerType === "mouse" && event.button !== 0) {
+        return;
+      }
+
+      const currentTarget = event.currentTarget;
+      const point = getCanvasPoint(event.clientX, event.clientY);
+
+      if (event.pointerType === "touch") {
+        activePointersRef.current.set(event.pointerId, point);
+
+        if (activePointersRef.current.size === 2) {
+          const [p1, p2] = Array.from(activePointersRef.current.values());
+          pinchStateRef.current = {
+            distance: Math.hypot(p1.x - p2.x, p1.y - p2.y),
+            midpoint: { x: (p1.x + p2.x) / 2, y: (p1.y + p2.y) / 2 },
+            zoom: zoomRef.current,
+            pan: panRef.current,
+          };
+          isPanningRef.current = false;
+          setIsPanning(false);
+        } else {
+          pinchStateRef.current = null;
+          isPanningRef.current = true;
+          pointerTypeRef.current = event.pointerType;
+          lastPanPointRef.current = { x: event.clientX, y: event.clientY };
+          setIsPanning(true);
+        }
+
+        currentTarget.setPointerCapture(event.pointerId);
+        event.preventDefault();
+        return;
+      }
+
+      isPanningRef.current = true;
+      pointerTypeRef.current = event.pointerType;
+      lastPanPointRef.current = { x: event.clientX, y: event.clientY };
+      setIsPanning(true);
+      currentTarget.setPointerCapture(event.pointerId);
+      event.preventDefault();
+    },
+    [getCanvasPoint]
+  );
+
+  const handleCanvasPointerMove = React.useCallback(
+    (event: React.PointerEvent<HTMLDivElement>) => {
+      const point = getCanvasPoint(event.clientX, event.clientY);
+
+      if (event.pointerType === "touch") {
+        activePointersRef.current.set(event.pointerId, point);
+
+        if (activePointersRef.current.size === 2) {
+          const [p1, p2] = Array.from(activePointersRef.current.values());
+          const distance = Math.hypot(p1.x - p2.x, p1.y - p2.y);
+          const midpoint = { x: (p1.x + p2.x) / 2, y: (p1.y + p2.y) / 2 };
+
+          const pinchState = pinchStateRef.current;
+          if (!pinchState) {
+            pinchStateRef.current = {
+              distance,
+              midpoint,
+              zoom: zoomRef.current,
+              pan: panRef.current,
+            };
+            isPanningRef.current = false;
+            setIsPanning(false);
+            return;
+          }
+
+          if (pinchState.distance > 0) {
+            const ratio = distance / pinchState.distance;
+            const targetZoom = clampZoom(pinchState.zoom * ratio);
+            applyZoom(targetZoom, midpoint);
+            pinchStateRef.current = {
+              distance,
+              midpoint,
+              zoom: zoomRef.current,
+              pan: panRef.current,
+            };
+          }
+          event.preventDefault();
+          return;
+        }
+
+        if (activePointersRef.current.size === 1) {
+          if (!isPanningRef.current) {
+            isPanningRef.current = true;
+            pointerTypeRef.current = event.pointerType;
+            setIsPanning(true);
+          }
+          lastPanPointRef.current = { x: event.clientX, y: event.clientY };
+        }
+      }
+
+      if (isPanningRef.current && pointerTypeRef.current === event.pointerType) {
+        const lastPoint = lastPanPointRef.current;
+        if (!lastPoint) {
+          lastPanPointRef.current = { x: event.clientX, y: event.clientY };
+          return;
+        }
+
+        const deltaX = event.clientX - lastPoint.x;
+        const deltaY = event.clientY - lastPoint.y;
+
+        if (deltaX === 0 && deltaY === 0) {
+          return;
+        }
+
+        lastPanPointRef.current = { x: event.clientX, y: event.clientY };
+
+        setPanState((prev) => ({
+          x: prev.x + deltaX,
+          y: prev.y + deltaY,
+        }));
+
+        event.preventDefault();
+      }
+    },
+    [applyZoom, clampZoom, getCanvasPoint, setPanState]
+  );
+
+  const endPanIfNeeded = React.useCallback(() => {
+    isPanningRef.current = false;
+    pointerTypeRef.current = null;
+    lastPanPointRef.current = null;
+    if (isPanning) {
+      setIsPanning(false);
+    }
+  }, [isPanning]);
+
+  const handleCanvasPointerUp = React.useCallback(
+    (event: React.PointerEvent<HTMLDivElement>) => {
+      if (event.pointerType === "touch") {
+        activePointersRef.current.delete(event.pointerId);
+        if (activePointersRef.current.size < 2) {
+          pinchStateRef.current = null;
+        }
+      }
+
+      if (pointerTypeRef.current === event.pointerType) {
+        endPanIfNeeded();
+      }
+
+      try {
+        event.currentTarget.releasePointerCapture(event.pointerId);
+      } catch {
+        // ignore
+      }
+    },
+    [endPanIfNeeded]
+  );
+
+  const handleCanvasPointerLeave = React.useCallback(
+    (event: React.PointerEvent<HTMLDivElement>) => {
+      if (pointerTypeRef.current === event.pointerType) {
+        endPanIfNeeded();
+      }
+    },
+    [endPanIfNeeded]
+  );
+
+  const screenToWorld = React.useCallback(
+    (point: { x: number; y: number }) => {
+      const currentPan = panRef.current;
+      const currentZoom = zoomRef.current;
+      return {
+        x: (point.x - currentPan.x) / currentZoom,
+        y: (point.y - currentPan.y) / currentZoom,
+      };
+    },
+    []
+  );
 
   const handleAddTable = React.useCallback(() => {
-    if (canvasBounds) {
-      const x = canvasBounds.left + (canvasBounds.right - canvasBounds.left) / 2;
-      const y = canvasBounds.top + (canvasBounds.bottom - canvasBounds.top) / 2;
+    const size = canvasSizeRef.current;
+    if (size) {
+      const centerWorld = screenToWorld({
+        x: size.width / 2,
+        y: size.height / 2,
+      });
       addTable({
-        x,
-        y,
+        x: centerWorld.x - TABLE_SIZE / 2,
+        y: centerWorld.y - TABLE_SIZE / 2,
       });
       return;
     }
@@ -166,14 +542,16 @@ export default function ReservationPanelDemo() {
     }
 
     const rect = canvas.getBoundingClientRect();
-    const x = rect.width / 2 - TABLE_SIZE / 2;
-    const y = rect.height / 2 - TABLE_SIZE / 2;
+    const centerWorld = screenToWorld({
+      x: rect.width / 2,
+      y: rect.height / 2,
+    });
 
     addTable({
-      x,
-      y,
+      x: centerWorld.x - TABLE_SIZE / 2,
+      y: centerWorld.y - TABLE_SIZE / 2,
     });
-  }, [canvasBounds]);
+  }, [screenToWorld]);
 
   const toggleSidebar = React.useCallback(() => {
     setSidebarOpen((prev) => !prev);
@@ -198,27 +576,44 @@ export default function ReservationPanelDemo() {
             }
           }}
         >
-          <div className="pointer-events-none absolute inset-0 z-0 bg-[linear-gradient(90deg,_rgba(255,255,255,0.03)_1px,_transparent_1px),_linear-gradient(180deg,_rgba(255,255,255,0.03)_1px,_transparent_1px)] bg-[size:64px_64px]" />
-          <div className="pointer-events-none absolute inset-0 z-0 bg-[radial-gradient(circle_at_center,_rgba(148,163,184,0.08),_transparent_55%)]" />
-
           <div
-            className="absolute inset-0 z-10"
+            ref={interactionLayerRef}
+            className="absolute inset-0 z-10 touch-none"
+            onPointerDown={handleCanvasPointerDown}
+            onPointerMove={handleCanvasPointerMove}
+            onPointerUp={handleCanvasPointerUp}
+            onPointerCancel={handleCanvasPointerUp}
+            onPointerLeave={handleCanvasPointerLeave}
             style={{
-              transform: `scale(${zoom})`,
-              transformOrigin: "top left",
+              cursor:
+                zoom > 1 || isPanning
+                  ? isPanning
+                    ? "grabbing"
+                    : "grab"
+                  : "default",
             }}
           >
-            {tables.map((table) => (
-              <DraggableTable
-                key={table.id}
-                table={table}
-                isSelected={table.id === selectedId}
-                onSelect={() => setDetailOpen(false)}
-                onOpenDetail={() => setDetailOpen(true)}
-                zoom={zoom}
-                bounds={canvasBounds}
-              />
-            ))}
+            <div
+              className="absolute inset-0"
+              style={{
+                transform: `translate(${pan.x}px, ${pan.y}px) scale(${zoom})`,
+                transformOrigin: "top left",
+              }}
+            >
+              <div className="pointer-events-none absolute inset-0 z-0 bg-[linear-gradient(90deg,_rgba(255,255,255,0.03)_1px,_transparent_1px),_linear-gradient(180deg,_rgba(255,255,255,0.03)_1px,_transparent_1px)] bg-[size:64px_64px]" />
+              <div className="pointer-events-none absolute inset-0 z-0 bg-[radial-gradient(circle_at_center,_rgba(148,163,184,0.08),_transparent_55%)]" />
+
+              {tables.map((table) => (
+                <DraggableTable
+                  key={table.id}
+                  table={table}
+              isSelected={table.id === selectedId}
+              onSelect={() => setDetailOpen(false)}
+              onOpenDetail={() => setDetailOpen(true)}
+              zoom={zoom}
+            />
+          ))}
+            </div>
           </div>
 
           <div className="pointer-events-none absolute inset-0 z-20 flex items-start justify-between px-6 pt-6">
@@ -252,7 +647,7 @@ export default function ReservationPanelDemo() {
             </div>
             <div className="flex items-center gap-2 rounded-full border border-slate-800 bg-slate-900/70 px-3 py-1 text-[11px] text-slate-400">
               <span className="inline-flex h-2 w-2 rounded-full bg-emerald-400" />
-              Drag tables to reposition | Double-click to edit
+              Drag to move | Double-click to edit | Pinch or scroll to zoom
             </div>
           </div>
 
@@ -362,10 +757,19 @@ function TableDetailSheet({
   const [chairInput, setChairInput] = React.useState<string>(
     table.chairs.toString()
   );
+  const [nameInput, setNameInput] = React.useState<string>(table.name);
 
   React.useEffect(() => {
     setChairInput(table.chairs.toString());
-  }, [table.id, table.chairs]);
+    setNameInput(table.name);
+  }, [table.id, table.chairs, table.name]);
+
+  const commitName = (raw: string) => {
+    const trimmed = raw.trim();
+    const nextName = trimmed.length === 0 ? "Table" : trimmed;
+    setNameForSelected(nextName);
+    setNameInput(nextName);
+  };
 
   const handleChange = (event: React.ChangeEvent<HTMLInputElement>) => {
     const value = event.target.value;
@@ -375,6 +779,26 @@ function TableDetailSheet({
       if (!Number.isNaN(parsed)) {
         setChairsForSelected(parsed);
       }
+    }
+  };
+
+  const handleNameChange = (event: React.ChangeEvent<HTMLInputElement>) => {
+    setNameInput(event.target.value);
+  };
+
+  const handleNameBlur = () => {
+    commitName(nameInput);
+  };
+
+  const handleNameKeyDown = (event: React.KeyboardEvent<HTMLInputElement>) => {
+    if (event.key === "Enter") {
+      event.preventDefault();
+      commitName(nameInput);
+      (event.currentTarget as HTMLInputElement).blur();
+    } else if (event.key === "Escape") {
+      event.preventDefault();
+      setNameInput(table.name);
+      (event.currentTarget as HTMLInputElement).blur();
     }
   };
 
@@ -395,14 +819,20 @@ function TableDetailSheet({
         onClick={onClose}
       />
       <div className="relative z-10 w-full max-w-sm rounded-3xl border border-slate-800 bg-slate-900 p-6 shadow-xl">
-        <div className="flex items-center justify-between">
-          <div>
+        <div className="flex items-start justify-between gap-4">
+          <div className="flex flex-1 flex-col gap-2">
             <p className="text-xs uppercase tracking-[0.3em] text-slate-500">
               Table Focus
             </p>
-            <p className="mt-1 text-lg font-semibold text-white">
-              {table.name}
-            </p>
+            <input
+              type="text"
+              value={nameInput}
+              onChange={handleNameChange}
+              onBlur={handleNameBlur}
+              onKeyDown={handleNameKeyDown}
+              className="w-full rounded-xl border border-slate-700 bg-slate-950 px-3 py-2 text-sm font-semibold text-white transition focus:border-emerald-500 focus:outline-none focus:ring-1 focus:ring-emerald-500/40"
+              placeholder="Table name"
+            />
             <p className="text-xs text-slate-500">
               {Math.round(table.x)}, {Math.round(table.y)} | {table.chairs} seats
             </p>
@@ -477,14 +907,12 @@ function DraggableTable({
   onSelect,
   onOpenDetail,
   zoom,
-  bounds,
 }: {
   table: Table;
   isSelected: boolean;
   onSelect: () => void;
   onOpenDetail: () => void;
   zoom: number;
-  bounds: CanvasBounds | null;
 }) {
   const nodeRef = React.useRef<HTMLDivElement>(null);
   const [isDragging, setIsDragging] = React.useState(false);
@@ -544,7 +972,6 @@ function DraggableTable({
       onStart={handleStart}
       onDrag={handleDrag}
       onStop={handleStop}
-      bounds={bounds ?? undefined}
       scale={zoom}
     >
       <div
@@ -556,6 +983,7 @@ function DraggableTable({
         style={{ backgroundColor: table.color }}
         onClick={handleClick}
         onDoubleClick={handleDoubleClick}
+        data-table-node="true"
       >
         {table.name}
         {renderChairs(table.chairs)}
