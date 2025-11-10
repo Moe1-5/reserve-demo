@@ -21,6 +21,13 @@ export default function HomePage() {
               <LayoutDashboard className="h-5 w-5" />
               Reservation Panel
             </Link>
+            <Link
+              to="/reservations"
+              className="inline-flex items-center justify-center gap-2 rounded-full border border-slate-700 px-6 py-3 font-semibold text-slate-200 transition hover:border-emerald-400 hover:text-white"
+            >
+              <LayoutDashboard className="h-5 w-5" />
+              Reservations
+            </Link>
           </div>
         </div>
       </section>

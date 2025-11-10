@@ -7,6 +7,7 @@ import {
 import AppLayout from "./AppLayout"
 import HomePage from "./pages/HomePage";
 import DragPanelDemo from "./pages/ReservationPanelDemo";
+import ReservationsPage from "./pages/ReservationsPage";
 
 
 const rootRoute = new RootRoute({
@@ -25,8 +26,14 @@ const dragRoute = new Route({
     component: DragPanelDemo,
 })
 
+const reservationsRoute = new Route({
+    getParentRoute: () => rootRoute,
+    path: "/reservations",
+    component: ReservationsPage,
+})
 
-const routeTree = rootRoute.addChildren([HomeRoute, dragRoute])
+
+const routeTree = rootRoute.addChildren([HomeRoute, dragRoute, reservationsRoute])
 
 
 export const router = new Router ({routeTree})
