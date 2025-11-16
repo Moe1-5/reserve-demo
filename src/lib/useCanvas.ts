@@ -40,8 +40,9 @@ export type UseCanvasResult = {
 export function useCanvas(): UseCanvasResult {
   const canvasRef = useRef<HTMLDivElement | null>(null);
   const interactionLayerRef = useRef<HTMLDivElement | null>(null);
-
+  const [mousePos, setMousePos] = useState<Point>({ x: 0, y: 0 });
   const [canvasSize, setCanvasSize] = useState<Size | null>(null);
+  const touchMidRef = useRef<Point>({x: 0, y: 0});
   const [zoom, setZoom] = useState(1);
   const zoomRef = useRef(zoom);
   useEffect(() => {
@@ -143,7 +144,7 @@ export function useCanvas(): UseCanvasResult {
       setPan(newPan);
       setZoom(clampedZoom);
     },
-    [] // No dependencies, relies on refs for current state
+    []
   );
 
   // Mouse wheel zoom handler
@@ -165,7 +166,7 @@ export function useCanvas(): UseCanvasResult {
 
       applyZoomWithOrigin(newZoom, { x: mouseX, y: mouseY });
     },
-    [applyZoomWithOrigin]
+    [applyZoomWithOrigin, mousePos]
   );
 
   // Attach wheel listener to the interaction layer
@@ -226,6 +227,32 @@ export function useCanvas(): UseCanvasResult {
     [pan]
   );
 
+  const handleTwoFingerZoom = useCallback((touches: Map<number, Point>) => {
+    if (touches.size !== 2) return;
+
+    const pts = Array.from(touches.values());
+    const midpoint = {
+      x: (pts[0].x + pts[1].x) / 2,
+      y: (pts[0].y + pts[1].y) / 2,
+    };
+
+    const lastY = pointerStateRef.current.lastMidpointY;
+
+    if (lastY !== 0) {
+      const deltaY = midpoint.y - lastY;
+
+      // Vertical movement zoom
+      const zoomChange = -deltaY * 0.05;
+      const newZoom = zoomRef.current * (1 + zoomChange);
+
+      applyZoomWithOrigin(newZoom, midpoint);
+    }
+
+    pointerStateRef.current.lastMidpointY = midpoint.y;
+    touchMidRef.current = midpoint;
+  }, [applyZoomWithOrigin]);
+
+
   // Pointer move handler
   const handleCanvasPointerMove = useCallback(
     (event: ReactPointerEvent<HTMLDivElement>) => {
@@ -236,6 +263,7 @@ export function useCanvas(): UseCanvasResult {
       const x = event.clientX - rect.left;
       const y = event.clientY - rect.top;
 
+      setMousePos({x, y});
       // Update touch position
       if (pointerStateRef.current.touches.has(event.pointerId)) {
         pointerStateRef.current.touches.set(event.pointerId, { x, y });
@@ -244,24 +272,7 @@ export function useCanvas(): UseCanvasResult {
       // Handle two-finger vertical zoom
       if (pointerStateRef.current.touches.size === 2) {
         console.log("[Debug] Two-finger zoom detected.");
-        const currentMidpoint = getTouchMidpoint(pointerStateRef.current.touches);
-        const lastY = pointerStateRef.current.lastMidpointY;
-
-        if (lastY > 0) {
-          const deltaY = currentMidpoint.y - lastY;
-
-          // Only zoom if there's significant movement
-          if (Math.abs(deltaY) > 10) {
-            console.log("[Debug] Two-finger zoom deltaY:", deltaY);
-            // Up (negative deltaY) = zoom in, Down (positive deltaY) = zoom out
-            const zoomChange = -deltaY * 0.0001;
-            const newZoom = zoomRef.current * (1 + zoomChange);
-
-            applyZoomWithOrigin(newZoom, currentMidpoint);
-          }
-        }
-
-        pointerStateRef.current.lastMidpointY = currentMidpoint.y;
+        handleTwoFingerZoom(pointerStateRef.current.touches);
         return;
       }
 
@@ -292,7 +303,7 @@ export function useCanvas(): UseCanvasResult {
 
       event.currentTarget.releasePointerCapture(event.pointerId);
     },
-    []
+    [handleTwoFingerZoom, touchMidRef]
   );
 
   // Pointer leave handler
