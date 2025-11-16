@@ -62,10 +62,10 @@ export default function ReservationsPage() {
   }, [floors]);
 
   const categorized = React.useMemo(() => {
-    const now = new Date();
-    const startOfToday = new Date(now);
-    startOfToday.setHours(0, 0, 0, 0);
-    const endOfToday = new Date(now);
+    const tomorrow = new Date().getDate() + 1;
+    const startOfTomorrow = new Date(tomorrow);
+    startOfTomorrow.setHours(0, 0, 0, 0);
+    const endOfToday = new Date(tomorrow);
     endOfToday.setHours(23, 59, 59, 999);
 
     const today: ReservationWithMeta[] = [];
@@ -73,7 +73,7 @@ export default function ReservationsPage() {
     const past: ReservationWithMeta[] = [];
 
     reservations.forEach((reservation) => {
-      if (reservation.datetime < startOfToday) {
+      if (reservation.datetime < startOfTomorrow) {
         past.push(reservation);
       } else if (reservation.datetime > endOfToday) {
         upcoming.push(reservation);

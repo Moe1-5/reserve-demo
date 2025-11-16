@@ -137,7 +137,7 @@ export default function ReservationPanelDemo() {
       setPanState(snapshot.pan);
     } else {
       applyZoom(1);
-      setPanState({ x: 0, y: 0 });
+      setPanState({ x:0, y: 0});
     }
   }, [activeFloorId, applyZoom, setDetailOpen, setPanState]);
 
@@ -149,7 +149,6 @@ export default function ReservationPanelDemo() {
   }, [activeFloorId, pan, zoom]);
 
   const isAdmin = mode === "admin";
-  const isClient = mode === "client";
 
   React.useEffect(() => {
     setPanState((prev) => prev);
@@ -161,13 +160,6 @@ export default function ReservationPanelDemo() {
     setDetailOpen(false);
     selectTable(null);
     handleZoomReset();
-  };
-
-  const handleResetMode = () => {
-    setPlannerMode("pending");
-    setSidebarOpen(false);
-    setDetailOpen(false);
-    selectTable(null);
   };
 
   const handleCreateReservation = React.useCallback(
@@ -321,12 +313,15 @@ export default function ReservationPanelDemo() {
             }}
           >
             <div
-              className="absolute left-0 top-0"
+              className="absolute left-0 top-0 border border-white"
               style={{
                 width: WORLD_WIDTH,
                 height: WORLD_HEIGHT,
                 transform: `translate(${pan.x}px, ${pan.y}px) scale(${zoom})`,
                 transformOrigin: "top left",
+                // willChange: "transform",
+                // backfaceVisibility: "hidden",
+                // boxShadow: "0 0 0 0 2px white",
               }}
             >
               {tables.map((table) => (
@@ -385,44 +380,6 @@ export default function ReservationPanelDemo() {
                 {isAdmin
                   ? "Drag to move | Double-click to edit | Pinch or scroll to zoom"
                   : "Tap a table to view details | Pinch or scroll to zoom"}
-              </div>
-              <div className="pointer-events-auto flex items-center gap-1 rounded-full border border-slate-800 bg-slate-900 px-2 py-1 text-[11px] text-slate-300 shadow">
-                <span className="px-2 py-0.5 text-xs uppercase tracking-[0.25em] text-slate-500">
-                  Mode
-                </span>
-                <button
-                  type="button"
-                  onClick={() => handleModeSelect("admin")}
-                  className={[
-                    "rounded-full px-2 py-1 text-xs font-semibold transition",
-                    isAdmin
-                      ? "bg-emerald-500 text-slate-950"
-                      : "text-slate-300 hover:text-white",
-                  ].join(" ")}
-                  disabled={isAdmin}
-                >
-                  Admin
-                </button>
-                <button
-                  type="button"
-                  onClick={() => handleModeSelect("client")}
-                  className={[
-                    "rounded-full px-2 py-1 text-xs font-semibold transition",
-                    isClient
-                      ? "bg-emerald-500 text-slate-950"
-                      : "text-slate-300 hover:text-white",
-                  ].join(" ")}
-                  disabled={isClient}
-                >
-                  Client
-                </button>
-                <button
-                  type="button"
-                  onClick={handleResetMode}
-                  className="ml-1 rounded-full px-2 py-1 text-xs font-semibold text-slate-400 transition hover:text-white"
-                >
-                  Change
-                </button>
               </div>
             </div>
           </div>
@@ -727,8 +684,9 @@ function ClientReservationSheet({
 }: ClientReservationSheetProps) {
   const todayIso = React.useMemo(() => {
     const today = new Date();
-    today.setHours(0, 0, 0, 0);
-    return today.toISOString().slice(0, 10);
+    today.setDate(today.getDate());
+    today.setHours(today.getHours() -  today.getTimezoneOffset() / 60);
+    return today.toISOString().slice(0, 10);  
   }, []);
   const [reservationDate, setReservationDate] = React.useState<string>(todayIso);
   const [selectedSlot, setSelectedSlot] = React.useState<string | null>(null);
@@ -761,12 +719,7 @@ function ClientReservationSheet({
 
   const upcomingReservations = React.useMemo(() => {
     return reservations
-      .filter((reservation) => reservation.tableId === table.id)
-      .sort((a, b) => {
-        const dateCompare = a.date.localeCompare(b.date);
-        if (dateCompare !== 0) return dateCompare;
-        return a.slot.localeCompare(b.slot);
-      });
+      .filter((reservation) => reservation.tableId === table.id && reservation.date >= todayIso)
   }, [reservations, table.id]);
 
   const slotIsUnavailable = React.useCallback(
@@ -778,7 +731,7 @@ function ClientReservationSheet({
   const handleDateChange = (event: React.ChangeEvent<HTMLInputElement>) => {
     const next = event.target.value;
     if (next !== todayIso) {
-      setReservationDate(todayIso);
+      setReservationDate(next);
       setSelectedSlot(null);
       setFeedback({
         type: "error",
@@ -809,11 +762,12 @@ function ClientReservationSheet({
     }
 
     const now = new Date();
+    console.log("This is the Date:", now)
     const selectedDateTime = new Date(`${reservationDate}T${selectedSlot}:00`);
     if (selectedDateTime < now) {
       setFeedback({
         type: "error",
-        message: "Please choose a time in the future.",
+        message: "Please choose a time in .",
       });
       return;
     }
@@ -926,7 +880,7 @@ function ClientReservationSheet({
                   type="date"
                   value={reservationDate}
                   min={todayIso}
-                  max={todayIso}
+                  // max={todayIso}
                   onChange={handleDateChange}
                   className="w-full rounded-xl border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-white transition focus:border-emerald-500 focus:outline-none focus:ring-1 focus:ring-emerald-500/40"
                 />

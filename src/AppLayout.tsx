@@ -1,11 +1,13 @@
+import React from "react";
 import { Link, Outlet, useRouterState } from "@tanstack/react-router";
 import { useStore } from "@tanstack/react-store";
 import { ArrowLeft, Plus } from "lucide-react";
-import { addFloor, demoStore, setActiveFloor } from "./lib/demoStore";
+import { addFloor, demoStore, setActiveFloor, setPlannerMode } from "./lib/demoStore";
 
 export default function AppLayout() {
   const { location } = useRouterState();
   const { floors, activeFloorId, mode } = useStore(demoStore);
+  
   const isHome = location.pathname === "/";
   const isPlannerRoute =
     location.pathname === "/reservation" || location.pathname.startsWith("/reservation/");
@@ -30,6 +32,10 @@ export default function AppLayout() {
     setActiveFloor(newId);
   };
 
+  React.useEffect(() => {
+    setPlannerMode("pending");
+  }, [isHome, isPlannerRoute]);
+  
   const mainClasses = [
     "mx-auto flex w-full flex-1 flex-col gap-8 px-4 pb-12 pt-8 sm:px-6 lg:px-10",
     isHome ? "max-w-5xl" : "max-w-none",

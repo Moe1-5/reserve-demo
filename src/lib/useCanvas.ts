@@ -3,7 +3,7 @@ import {
   useEffect,
   useRef,
   useState,
-  type MutableRefObject,
+  type RefObject,
   type PointerEvent as ReactPointerEvent,
 } from "react";
 import {
@@ -16,44 +16,11 @@ import {
 
 type Point = { x: number; y: number };
 type Size = { width: number; height: number };
-type PanUpdater =
-  | Point
-  | ((current: Point) => Point);
-
-type PinchState = {
-  distance: number;
-  midpoint: Point;
-  zoom: number;
-  pan: Point;
-};
-
-function clampPanToWorld(pan: Point, viewport: Size | null, zoom: number): Point {
-  if (!viewport) {
-    return pan;
-  }
-
-  const worldWidth = WORLD_WIDTH * zoom;
-  const worldHeight = WORLD_HEIGHT * zoom;
-
-  const horizontalCenter = (viewport.width - worldWidth) / 2;
-  const verticalCenter = (viewport.height - worldHeight) / 2;
-
-  const clampedX =
-    worldWidth <= viewport.width
-      ? horizontalCenter
-      : Math.min(0, Math.max(pan.x, viewport.width - worldWidth));
-
-  const clampedY =
-    worldHeight <= viewport.height
-      ? verticalCenter
-      : Math.min(0, Math.max(pan.y, viewport.height - worldHeight));
-
-  return { x: clampedX, y: clampedY };
-}
+type PanUpdater = Point | ((current: Point) => Point);
 
 export type UseCanvasResult = {
-  canvasRef: MutableRefObject<HTMLDivElement | null>;
-  interactionLayerRef: MutableRefObject<HTMLDivElement | null>;
+  canvasRef: RefObject<HTMLDivElement | null>;
+  interactionLayerRef: RefObject<HTMLDivElement | null>;
   canvasSize: Size | null;
   zoom: number;
   pan: Point;
@@ -75,372 +42,314 @@ export function useCanvas(): UseCanvasResult {
   const interactionLayerRef = useRef<HTMLDivElement | null>(null);
 
   const [canvasSize, setCanvasSize] = useState<Size | null>(null);
-  const canvasSizeRef = useRef<Size | null>(canvasSize);
-
   const [zoom, setZoom] = useState(1);
-  const zoomRef = useRef(1);
-
-  const [pan, setPan] = useState<Point>({ x: 0, y: 0 });
-  const panRef = useRef<Point>(pan);
-
-  const [isPanning, setIsPanning] = useState(false);
-  const isPanningRef = useRef(false);
-
-  const pointerTypeRef = useRef<string | null>(null);
-  const lastPanPointRef = useRef<Point | null>(null);
-  const activePointersRef = useRef(new Map<number, Point>());
-  const pinchStateRef = useRef<PinchState | null>(null);
-
+  const zoomRef = useRef(zoom);
   useEffect(() => {
     zoomRef.current = zoom;
   }, [zoom]);
 
+  const [pan, setPan] = useState<Point>({ x: 0, y: 0 });
+  const panRef = useRef(pan);
   useEffect(() => {
     panRef.current = pan;
   }, [pan]);
 
+  const [isPanning, setIsPanning] = useState(false);
+
+  // Track pointer state for touch gestures
+  const pointerStateRef = useRef({
+    isPanning: false,
+    startPan: { x: 0, y: 0 },
+    startPointer: { x: 0, y: 0 },
+    // For two-finger vertical zoom
+    touches: new Map<number, { x: number; y: number }>(),
+    lastMidpointY: 0,
+  });
+
+  // Track if we've initialized
+  const hasInitializedRef = useRef(false);
+  const lastSizeRef = useRef({ width: 0, height: 0 });
+
+  // Measure canvas size and center the world on mount
   useEffect(() => {
-    canvasSizeRef.current = canvasSize;
-  }, [canvasSize]);
-
-  const setPanState = useCallback(
-    (updater: PanUpdater) => {
-      setPan((prev) => {
-        const nextValue =
-          typeof updater === "function" ? (updater as (current: Point) => Point)(prev) : updater;
-        const clamped = clampPanToWorld(nextValue, canvasSizeRef.current, zoomRef.current);
-        if (clamped.x === prev.x && clamped.y === prev.y) {
-          panRef.current = prev;
-          return prev;
-        }
-        panRef.current = clamped;
-        return clamped;
-      });
-    },
-    [],
-  );
-
-  const clampZoom = useCallback(
-    (value: number) => Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, value)),
-    [],
-  );
-
-  const applyZoom = useCallback(
-    (nextZoom: number, focusPoint?: Point) => {
-      const size = canvasSizeRef.current;
-      const currentZoom = zoomRef.current;
-      const clampedZoom = clampZoom(Math.round(nextZoom * 100) / 100);
-
-      if (!size) {
-        zoomRef.current = clampedZoom;
-        setZoom((prev) => (prev === clampedZoom ? prev : clampedZoom));
-        setPanState({ x: 0, y: 0 });
-        return;
-      }
-
-      const focus =
-        focusPoint ?? {
-          x: size.width / 2,
-          y: size.height / 2,
-        };
-
-      const currentPan = panRef.current;
-      const canvasPoint = {
-        x: focus.x / currentZoom - currentPan.x,
-        y: focus.y / currentZoom - currentPan.y,
-      };
-
-      const panRaw = {
-        x: focus.x / clampedZoom - canvasPoint.x,
-        y: focus.y / clampedZoom - canvasPoint.y,
-      };
-
-      zoomRef.current = clampedZoom;
-      setZoom((prev) => (prev === clampedZoom ? prev : clampedZoom));
-      setPanState(() => panRaw);
-    },
-    [clampZoom, setPanState],
-  );
-
-  const handleZoomIn = useCallback(() => {
-    applyZoom(zoomRef.current + ZOOM_STEP);
-  }, [applyZoom]);
-
-  const handleZoomOut = useCallback(() => {
-    applyZoom(zoomRef.current - ZOOM_STEP);
-  }, [applyZoom]);
-
-  const handleZoomReset = useCallback(() => {
-    applyZoom(1);
-    setPanState({ x: 0, y: 0 });
-  }, [applyZoom, setPanState]);
-
-  useEffect(() => {
-    if (typeof window === "undefined") {
-      return;
-    }
     const canvas = canvasRef.current;
-    if (!canvas) {
-      return;
-    }
+    if (!canvas) return;
 
     const updateSize = () => {
       const rect = canvas.getBoundingClientRect();
+      
+      // Only update if size actually changed (prevent infinite loops)
+      if (rect.width === lastSizeRef.current.width && rect.height === lastSizeRef.current.height) {
+        return;
+      }
+      
+      lastSizeRef.current = { width: rect.width, height: rect.height };
       setCanvasSize({ width: rect.width, height: rect.height });
+
+      // Center the world on initial load ONCE
+      if (!hasInitializedRef.current && rect.width > 0 && rect.height > 0) {
+        hasInitializedRef.current = true;
+        
+        let centerX = rect.width / 2 - WORLD_WIDTH / 2;
+        let centerY = rect.height / 2 - WORLD_HEIGHT / 2;
+        
+        // If world is bigger than viewport, start at 0,0
+        if (centerX < 0) centerX = 0;
+        if (centerY < 0) centerY = 0;
+        
+        setPan({ x: centerX, y: centerY });
+      }
     };
 
     updateSize();
+    const resizeObserver = new ResizeObserver(updateSize);
+    resizeObserver.observe(canvas);
 
-    let resizeObserver: ResizeObserver | null = null;
-
-    if (typeof ResizeObserver !== "undefined") {
-      resizeObserver = new ResizeObserver(() => {
-        updateSize();
-      });
-      resizeObserver.observe(canvas);
-    } else {
-      window.addEventListener("resize", updateSize);
-    }
-
-    return () => {
-      if (resizeObserver) {
-        resizeObserver.disconnect();
-      } else {
-        window.removeEventListener("resize", updateSize);
-      }
-    };
+    return () => resizeObserver.disconnect();
   }, []);
 
-  const getCanvasPoint = useCallback((clientX: number, clientY: number): Point => {
-    const canvas = canvasRef.current;
-    if (!canvas) {
-      return { x: clientX, y: clientY };
-    }
-    const rect = canvas.getBoundingClientRect();
-    return {
-      x: clientX - rect.left,
-      y: clientY - rect.top,
-    };
-  }, []);
-
-  const handleCanvasWheel = useCallback(
-    (event: WheelEvent) => {
-      event.preventDefault();
-
-      const ctrlLike = event.ctrlKey || event.metaKey;
-
-      if (ctrlLike) {
-        const focus = getCanvasPoint(event.clientX, event.clientY);
-        const delta = -event.deltaY * 0.002;
-        if (delta !== 0) {
-          applyZoom(zoomRef.current * (1 + delta), focus);
-        }
-        return;
-      }
-
-      const { deltaX, deltaY } = event;
-      if (deltaX === 0 && deltaY === 0) {
-        return;
-      }
-
-      setPanState((prev) => ({
-        x: prev.x - deltaX,
-        y: prev.y - deltaY,
-      }));
+  // Convert screen coordinates to world coordinates
+  const screenToWorld = useCallback(
+    (screen: Point): Point => {
+      return {
+        x: (screen.x - pan.x) / zoom,
+        y: (screen.y - pan.y) / zoom,
+      };
     },
-    [applyZoom, getCanvasPoint, setPanState],
+    [pan, zoom]
   );
 
+  // Apply zoom with origin point (keeps point under cursor fixed)
+  const applyZoomWithOrigin = useCallback(
+    (newZoom: number, origin: Point) => {
+      console.log(`[Debug] applyZoomWithOrigin called. newZoom: ${newZoom}, origin:`, origin);
+      const clampedZoom = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, newZoom));
+      const currentZoom = zoomRef.current;
+      const currentPan = panRef.current;
+
+      if (currentZoom === clampedZoom) {
+        console.log("[Debug] Zoom unchanged.");
+        return;
+      }
+
+      // Calculate new pan to keep origin point fixed
+      const newPan = {
+        x: origin.x - (origin.x - currentPan.x) * (clampedZoom / currentZoom),
+        y: origin.y - (origin.y - currentPan.y) * (clampedZoom / currentZoom),
+      };
+      
+      console.log("[Debug] New Pan:", newPan, "New Zoom:", clampedZoom);
+
+      setPan(newPan);
+      setZoom(clampedZoom);
+    },
+    [] // No dependencies, relies on refs for current state
+  );
+
+  // Mouse wheel zoom handler
+  const handleWheel = useCallback(
+    (event: WheelEvent) => {
+      event.preventDefault();
+      console.log("[Debug] handleWheel triggered.");
+
+      const canvas = interactionLayerRef.current;
+      if (!canvas) return;
+
+      const rect = canvas.getBoundingClientRect();
+      const mouseX = event.clientX - rect.left;
+      const mouseY = event.clientY - rect.top;
+
+      const delta = event.deltaY < 0 ? 1 : -1;
+      const zoomFactor = delta > 0 ? 1 + ZOOM_STEP : 1 - ZOOM_STEP;
+      const newZoom = zoomRef.current * zoomFactor;
+
+      applyZoomWithOrigin(newZoom, { x: mouseX, y: mouseY });
+    },
+    [applyZoomWithOrigin]
+  );
+
+  // Attach wheel listener to the interaction layer
   useEffect(() => {
-    const node = interactionLayerRef.current;
-    if (!node) return;
+    const interactionLayer = interactionLayerRef.current;
+    if (!interactionLayer) return;
 
-    const listener = (event: WheelEvent) => {
-      handleCanvasWheel(event);
+    interactionLayer.addEventListener("wheel", handleWheel, { passive: false });
+    return () => interactionLayer.removeEventListener("wheel", handleWheel);
+  }, [handleWheel, interactionLayerRef.current]);
+
+  // Calculate midpoint between two touch points
+  const getTouchMidpoint = (touches: Map<number, Point>): Point => {
+    const points = Array.from(touches.values());
+    if (points.length < 2) return { x: 0, y: 0 };
+
+    return {
+      x: (points[0].x + points[1].x) / 2,
+      y: (points[0].y + points[1].y) / 2,
     };
+  };
 
-    node.addEventListener("wheel", listener, { passive: false });
-
-    return () => {
-      node.removeEventListener("wheel", listener);
-    };
-  }, [handleCanvasWheel]);
-
+  // Pointer down handler
   const handleCanvasPointerDown = useCallback(
     (event: ReactPointerEvent<HTMLDivElement>) => {
       const target = event.target as HTMLElement;
-      if (target.closest("[data-table-node='true']")) {
+      if (target.closest("[data-table-node='true']")) return;
+      if (event.pointerType === "mouse" && event.button !== 0) return;
+
+      const canvas = canvasRef.current;
+      if (!canvas) return;
+
+      const rect = canvas.getBoundingClientRect();
+      const x = event.clientX - rect.left;
+      const y = event.clientY - rect.top;
+
+      // Track touch for two-finger detection
+      pointerStateRef.current.touches.set(event.pointerId, { x, y });
+
+      // If two fingers, start vertical zoom
+      if (pointerStateRef.current.touches.size === 2) {
+        const midpoint = getTouchMidpoint(pointerStateRef.current.touches);
+        pointerStateRef.current.lastMidpointY = midpoint.y;
+        pointerStateRef.current.isPanning = false;
+        setIsPanning(false);
         return;
       }
 
-      if (event.pointerType === "mouse" && event.button !== 0) {
-        return;
+      // Single pointer/finger - start panning
+      if (pointerStateRef.current.touches.size === 1) {
+        pointerStateRef.current.isPanning = true;
+        pointerStateRef.current.startPan = { ...pan };
+        pointerStateRef.current.startPointer = { x, y };
+        setIsPanning(true);
+        event.currentTarget.setPointerCapture(event.pointerId);
       }
-
-      const currentTarget = event.currentTarget;
-      const point = getCanvasPoint(event.clientX, event.clientY);
-
-      if (event.pointerType === "touch") {
-        activePointersRef.current.set(event.pointerId, point);
-
-        if (activePointersRef.current.size === 2) {
-          const [p1, p2] = Array.from(activePointersRef.current.values());
-          pinchStateRef.current = {
-            distance: Math.hypot(p1.x - p2.x, p1.y - p2.y),
-            midpoint: { x: (p1.x + p2.x) / 2, y: (p1.y + p2.y) / 2 },
-            zoom: zoomRef.current,
-            pan: panRef.current,
-          };
-          isPanningRef.current = false;
-          setIsPanning(false);
-        } else {
-          pinchStateRef.current = null;
-          isPanningRef.current = true;
-          pointerTypeRef.current = event.pointerType;
-          lastPanPointRef.current = { x: event.clientX, y: event.clientY };
-          setIsPanning(true);
-        }
-
-        currentTarget.setPointerCapture(event.pointerId);
-        event.preventDefault();
-        return;
-      }
-
-      isPanningRef.current = true;
-      pointerTypeRef.current = event.pointerType;
-      lastPanPointRef.current = { x: event.clientX, y: event.clientY };
-      setIsPanning(true);
-      currentTarget.setPointerCapture(event.pointerId);
-      event.preventDefault();
     },
-    [getCanvasPoint],
+    [pan]
   );
 
+  // Pointer move handler
   const handleCanvasPointerMove = useCallback(
     (event: ReactPointerEvent<HTMLDivElement>) => {
-      const point = getCanvasPoint(event.clientX, event.clientY);
+      const canvas = canvasRef.current;
+      if (!canvas) return;
 
-      if (event.pointerType === "touch") {
-        activePointersRef.current.set(event.pointerId, point);
+      const rect = canvas.getBoundingClientRect();
+      const x = event.clientX - rect.left;
+      const y = event.clientY - rect.top;
 
-        if (activePointersRef.current.size === 2) {
-          const [p1, p2] = Array.from(activePointersRef.current.values());
-          const distance = Math.hypot(p1.x - p2.x, p1.y - p2.y);
-          const midpoint = { x: (p1.x + p2.x) / 2, y: (p1.y + p2.y) / 2 };
-
-          const pinchState = pinchStateRef.current;
-          if (!pinchState) {
-            pinchStateRef.current = {
-              distance,
-              midpoint,
-              zoom: zoomRef.current,
-              pan: panRef.current,
-            };
-            isPanningRef.current = false;
-            setIsPanning(false);
-            return;
-          }
-
-          if (pinchState.distance > 0) {
-            const ratio = distance / pinchState.distance;
-            const targetZoom = clampZoom(pinchState.zoom * ratio);
-            applyZoom(targetZoom, midpoint);
-            pinchStateRef.current = {
-              distance,
-              midpoint,
-              zoom: zoomRef.current,
-              pan: panRef.current,
-            };
-          }
-          event.preventDefault();
-          return;
-        }
-
-        if (activePointersRef.current.size === 1) {
-          if (!isPanningRef.current) {
-            isPanningRef.current = true;
-            pointerTypeRef.current = event.pointerType;
-            setIsPanning(true);
-          }
-          lastPanPointRef.current = { x: event.clientX, y: event.clientY };
-        }
+      // Update touch position
+      if (pointerStateRef.current.touches.has(event.pointerId)) {
+        pointerStateRef.current.touches.set(event.pointerId, { x, y });
       }
 
-      if (isPanningRef.current && pointerTypeRef.current === event.pointerType) {
-        const lastPoint = lastPanPointRef.current;
-        if (!lastPoint) {
-          lastPanPointRef.current = { x: event.clientX, y: event.clientY };
-          return;
+      // Handle two-finger vertical zoom
+      if (pointerStateRef.current.touches.size === 2) {
+        console.log("[Debug] Two-finger zoom detected.");
+        const currentMidpoint = getTouchMidpoint(pointerStateRef.current.touches);
+        const lastY = pointerStateRef.current.lastMidpointY;
+
+        if (lastY > 0) {
+          const deltaY = currentMidpoint.y - lastY;
+
+          // Only zoom if there's significant movement
+          if (Math.abs(deltaY) > 10) {
+            console.log("[Debug] Two-finger zoom deltaY:", deltaY);
+            // Up (negative deltaY) = zoom in, Down (positive deltaY) = zoom out
+            const zoomChange = -deltaY * 0.0001;
+            const newZoom = zoomRef.current * (1 + zoomChange);
+
+            applyZoomWithOrigin(newZoom, currentMidpoint);
+          }
         }
 
-        const deltaX = event.clientX - lastPoint.x;
-        const deltaY = event.clientY - lastPoint.y;
+        pointerStateRef.current.lastMidpointY = currentMidpoint.y;
+        return;
+      }
 
-        if (deltaX === 0 && deltaY === 0) {
-          return;
-        }
+      // Handle panning
+      if (pointerStateRef.current.isPanning) {
+        const dx = x - pointerStateRef.current.startPointer.x;
+        const dy = y - pointerStateRef.current.startPointer.y;
 
-        lastPanPointRef.current = { x: event.clientX, y: event.clientY };
-
-        setPanState((prev) => ({
-          x: prev.x + deltaX,
-          y: prev.y + deltaY,
-        }));
-
-        event.preventDefault();
+        setPan({
+          x: pointerStateRef.current.startPan.x + dx,
+          y: pointerStateRef.current.startPan.y + dy,
+        });
       }
     },
-    [applyZoom, clampZoom, getCanvasPoint, setPanState],
+    [applyZoomWithOrigin]
   );
 
-  const endPanIfNeeded = useCallback(() => {
-    isPanningRef.current = false;
-    pointerTypeRef.current = null;
-    lastPanPointRef.current = null;
-    if (isPanning) {
-      setIsPanning(false);
-    }
-  }, [isPanning]);
-
+  // Pointer up handler
   const handleCanvasPointerUp = useCallback(
     (event: ReactPointerEvent<HTMLDivElement>) => {
-      if (event.pointerType === "touch") {
-        activePointersRef.current.delete(event.pointerId);
-        if (activePointersRef.current.size < 2) {
-          pinchStateRef.current = null;
-        }
+      pointerStateRef.current.touches.delete(event.pointerId);
+
+      if (pointerStateRef.current.touches.size === 0) {
+        pointerStateRef.current.isPanning = false;
+        pointerStateRef.current.lastMidpointY = 0;
+        setIsPanning(false);
       }
 
-      if (pointerTypeRef.current === event.pointerType) {
-        endPanIfNeeded();
-      }
-
-      try {
-        event.currentTarget.releasePointerCapture(event.pointerId);
-      } catch {
-        // ignore
-      }
+      event.currentTarget.releasePointerCapture(event.pointerId);
     },
-    [endPanIfNeeded],
+    []
   );
 
+  // Pointer leave handler
   const handleCanvasPointerLeave = useCallback(
     (event: ReactPointerEvent<HTMLDivElement>) => {
-      if (pointerTypeRef.current === event.pointerType) {
-        endPanIfNeeded();
-      }
+      handleCanvasPointerUp(event);
     },
-    [endPanIfNeeded],
+    [handleCanvasPointerUp]
   );
 
-  const screenToWorld = useCallback((point: Point) => {
-    const currentPan = panRef.current;
-    const currentZoom = zoomRef.current;
-    return {
-      x: (point.x - currentPan.x) / currentZoom,
-      y: (point.y - currentPan.y) / currentZoom,
-    };
+  // Button zoom handlers
+  const handleZoomIn = useCallback(() => {
+    if (!canvasSize) return;
+    const center = { x: canvasSize.width / 2, y: canvasSize.height / 2 };
+    applyZoomWithOrigin(zoom + ZOOM_STEP, center);
+  }, [zoom, canvasSize, applyZoomWithOrigin]);
+
+  const handleZoomOut = useCallback(() => {
+    if (!canvasSize) return;
+    const center = { x: canvasSize.width / 2, y: canvasSize.height / 2 };
+    applyZoomWithOrigin(zoom - ZOOM_STEP, center);
+  }, [zoom, canvasSize, applyZoomWithOrigin]);
+
+  const handleZoomReset = useCallback(() => {
+    if (!canvasSize) return;
+    setZoom(1);
+    let centerX = canvasSize.width / 2 - WORLD_WIDTH / 2;
+    let centerY = canvasSize.height / 2 - WORLD_HEIGHT / 2;
+    
+    if (centerX < 0) centerX = 0;
+    if (centerY < 0) centerY = 0;
+    
+    setPan({ x: centerX, y: centerY });
+  }, [canvasSize]);
+
+  // Stable setPanState for external use
+  const setPanState = useCallback((updater: PanUpdater) => {
+    setPan(updater);
   }, []);
+
+  // Stable applyZoom for external use (with default center focus)
+  const applyZoom = useCallback(
+    (nextZoom: number, focusPoint?: Point) => {
+      if (!canvasSize && !focusPoint) {
+        setZoom(Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, nextZoom)));
+        return;
+      }
+
+      const focus = focusPoint ?? {
+        x: canvasSize!.width / 2,
+        y: canvasSize!.height / 2,
+      };
+
+      applyZoomWithOrigin(nextZoom, focus);
+    },
+    [canvasSize, applyZoomWithOrigin]
+  );
 
   return {
     canvasRef,

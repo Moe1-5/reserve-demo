@@ -225,11 +225,35 @@ function hydrateStoreFromLocalStorage(onHydrate?: (extras: CanvasExtras) => void
 }
 
 export function useFloorData(options?: UseFloorDataOptions) {
-  const { floors, activeFloorId, selectedId, nextFloorNumber } = useStore(demoStore);
+  // const { floors, activeFloorId, selectedId, nextFloorNumber } = useStore(demoStore);
   const hasHydratedRef = useRef(false);
   const extrasRef = useRef<CanvasExtras | null>(null);
   const onHydrate = options?.onHydrate;
   const getExtras = options?.getExtras;
+  const hydrationAttemptedRef = useRef(false);
+
+
+   if (
+    typeof window !== "undefined" &&
+    !hydrationAttemptedRef.current &&
+    !storeHydratedFromLocalStorage
+  ) {
+    const extras = hydrateStoreFromLocalStorage(onHydrate);
+    extrasRef.current = extras;
+    hydrationAttemptedRef.current = true;
+    hasHydratedRef.current = true;
+  } else if (typeof window !== "undefined" && !hydrationAttemptedRef.current) {
+    extrasRef.current = extrasRef.current ?? {};
+    hydrationAttemptedRef.current = true;
+    hasHydratedRef.current = true;
+  }
+
+  const storeState = useStore(demoStore);
+
+  const floors = storeState?.floors ?? [];
+  const activeFloorId = storeState?.activeFloorId ?? null;
+  const selectedId = storeState?.selectedId ?? null;
+  const nextFloorNumber = storeState?.nextFloorNumber ?? 1;
 
   const activeFloor = floors.find((floor) => floor.id === activeFloorId) ?? null;
   const tables: Table[] = activeFloor?.tables ?? [];
@@ -260,22 +284,8 @@ export function useFloorData(options?: UseFloorDataOptions) {
     [],
   );
 
-  const hydrationAttemptedRef = useRef(false);
 
-  if (
-    typeof window !== "undefined" &&
-    !hydrationAttemptedRef.current &&
-    !storeHydratedFromLocalStorage
-  ) {
-    const extras = hydrateStoreFromLocalStorage(onHydrate);
-    extrasRef.current = extras;
-    hydrationAttemptedRef.current = true;
-    hasHydratedRef.current = true;
-  } else if (typeof window !== "undefined" && !hydrationAttemptedRef.current) {
-    extrasRef.current = extrasRef.current ?? {};
-    hydrationAttemptedRef.current = true;
-    hasHydratedRef.current = true;
-  }
+ 
 
   useEffect(() => {
     if (hydrationAttemptedRef.current) {
