@@ -1,103 +1,108 @@
 import React from "react";
-import { TABLE_SIZE } from "../constants/reservationConst";
 
-export type RenderChairsOptions = {
-  size?: number;
+type RenderChairsOptions = {
+  tableWidth: number;
+  tableHeight: number;
   chairSize?: number;
   offset?: number;
-  chairClassName?: string;
 };
 
 export function renderChairs(
-  count: number,
-  {
-    size = TABLE_SIZE,
-    chairSize = 18,
-    offset = size / 2 + 16,
-    chairClassName,
-  }: RenderChairsOptions = {},
+  chairCount: number,
+  tableColor: string,
+  options: RenderChairsOptions
 ) {
-  if (count <= 0) {
-    return null;
+  // FIX: Removed 'tableHeight' from destructuring
+  const { tableWidth, chairSize = 28, offset = 34 } = options;
+  const chairs: React.ReactElement[] = [];
+  const chairsPerSide = Math.floor(chairCount / 2);
+
+  if (chairsPerSide === 0) {
+    return <>{chairs}</>;
   }
 
-  type Side = "top" | "bottom" | "right" | "left";
-  const sideOrder: Side[] = ["top", "bottom", "right", "left"];
-  const perSideTotals: Record<Side, number> = {
-    top: 0,
-    bottom: 0,
-    right: 0,
-    left: 0,
-  };
+  const spacing =
+    chairsPerSide > 1 ? tableWidth / (chairsPerSide + 1) : tableWidth / 2;
 
-  for (let i = 0; i < count; i++) {
-    const side = sideOrder[i % sideOrder.length];
-    perSideTotals[side] += 1;
-  }
+  const seatHeight = chairSize * 0.85;
+  const backrestHeight = 4;
+  const gap = 4;
 
-  const perSideIndex: Record<Side, number> = {
-    top: 0,
-    bottom: 0,
-    right: 0,
-    left: 0,
-  };
-
-  const rotationMap: Record<Side, number> = {
-    top: 180,
-    bottom: 0,
-    right: -90,
-    left: 90,
-  };
-
-  const chairs: React.ReactNode[] = [];
-
-  for (let i = 0; i < count; i++) {
-    const side = sideOrder[i % sideOrder.length];
-    const seatIndex = perSideIndex[side];
-    perSideIndex[side] += 1;
-
-    const seatsOnSide = perSideTotals[side];
-    const step = seatsOnSide > 0 ? size / (seatsOnSide + 1) : 0;
-
-    let x = 0;
-    let y = 0;
-
-    if (side === "top" || side === "bottom") {
-      const lateral = seatsOnSide > 1 ? -size / 2 + step * (seatIndex + 1) : 0;
-      x = lateral;
-      y = side === "top" ? -offset : offset;
-    } else {
-      const vertical = seatsOnSide > 1 ? -size / 2 + step * (seatIndex + 1) : 0;
-      y = vertical;
-      x = side === "left" ? -offset : offset;
-    }
-
-    const transform = `translate(-50%, -50%) translate(${x}px, ${y}px) rotate(${rotationMap[side]}deg)`;
-
+  // Top chairs (Backrest at TOP)
+  for (let i = 0; i < chairsPerSide; i++) {
+    const x = spacing * (i + 1);
     chairs.push(
       <div
-        key={`${side}-${seatIndex}`}
-        className={[
-          "pointer-events-none absolute flex items-center justify-center",
-          chairClassName ?? "",
-        ].join(" ")}
+        key={`top-${i}`}
+        className="absolute flex flex-col items-center"
         style={{
+          left: x - chairSize / 2,
+          top: -offset,
           width: chairSize,
-          height: chairSize,
-          transform,
-          transformOrigin: "center",
-          top: "50%",
-          left: "50%",
+          height: seatHeight + backrestHeight + gap,
         }}
       >
-        <div className="flex h-full w-full flex-col items-center justify-between">
-          <div className="h-[32%] w-[70%] rounded-full bg-slate-500/70 shadow-sm" />
-          <div className="flex h-[55%] w-full items-center justify-center rounded-[5px] border border-slate-800/80 bg-slate-200 shadow-[inset_0_-1px_0_rgba(15,23,42,0.32)]" />
-        </div>
-      </div>,
+        {/* Backrest (Thin Line) */}
+        <div
+          style={{
+            width: "100%",
+            height: backrestHeight,
+            backgroundColor: tableColor,
+            borderRadius: "4px",
+            marginBottom: gap,
+          }}
+        />
+        {/* Seat (Wide Square) */}
+        <div
+          style={{
+            width: "100%",
+            height: seatHeight,
+            backgroundColor: tableColor,
+            borderRadius: "6px",
+            boxShadow: "0 2px 4px rgba(0,0,0,0.1)",
+          }}
+        />
+      </div>
+    );
+  }
+
+  // Bottom chairs (Backrest at BOTTOM)
+  for (let i = 0; i < chairsPerSide; i++) {
+    const x = spacing * (i + 1);
+    chairs.push(
+      <div
+        key={`bottom-${i}`}
+        className="absolute flex flex-col items-center justify-end"
+        style={{
+          left: x - chairSize / 2,
+          bottom: -offset,
+          width: chairSize,
+          height: seatHeight + backrestHeight + gap,
+        }}
+      >
+        {/* Seat (Wide Square) */}
+        <div
+          style={{
+            width: "100%",
+            height: seatHeight,
+            backgroundColor: tableColor,
+            borderRadius: "6px",
+            boxShadow: "0 2px 4px rgba(0,0,0,0.1)",
+            marginBottom: gap,
+          }}
+        />
+        {/* Backrest (Thin Line) */}
+        <div
+          style={{
+            width: "100%",
+            height: backrestHeight,
+            backgroundColor: tableColor,
+            borderRadius: "4px",
+          }}
+        />
+      </div>
     );
   }
 
   return <>{chairs}</>;
 }
-

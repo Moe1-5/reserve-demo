@@ -1,132 +1,118 @@
-import React from "react";
 import { Link, Outlet, useRouterState } from "@tanstack/react-router";
 import { useStore } from "@tanstack/react-store";
-import { ArrowLeft, Plus } from "lucide-react";
-import { addFloor, demoStore, setActiveFloor, setPlannerMode } from "./lib/demoStore";
+import { ArrowLeft, Plus, LayoutGrid } from "lucide-react";
+import { addFloor, setActiveFloor, demoStore } from "./lib/demoStore";
 
 export default function AppLayout() {
   const { location } = useRouterState();
   const { floors, activeFloorId, mode } = useStore(demoStore);
-  
+
   const isHome = location.pathname === "/";
-  const isPlannerRoute =
-    location.pathname === "/reservation" || location.pathname.startsWith("/reservation/");
-  const isReservationsRoute =
-    location.pathname === "/reservations" || location.pathname.startsWith("/reservations/");
-  const showNavLinks = isPlannerRoute || isReservationsRoute;
+  const isAdminRoute = location.pathname.startsWith("/admin");
+  const isClientRoute = location.pathname.startsWith("/client");
+
+  // Detect if we are in the visual editor (Panel)
+  const isPanel = location.pathname.includes("/panel");
+
+  // Show floor controls only on Panel pages
+  const showFloorControls = isPanel && (isAdminRoute || isClientRoute);
   const isAdmin = mode === "admin";
-  const showFloorControls = isPlannerRoute && (mode === "admin" || mode === "client");
-  const headerTitle = isHome
-    ? "Overview"
-    : isPlannerRoute
-    ? "Reservation Planner"
-    : isReservationsRoute
-    ? "Reservations"
-    : "NeutroReserve";
 
   const handleAddFloor = () => {
-    if (!isAdmin) {
-      return;
-    }
+    if (!isAdmin) return;
     const newId = addFloor();
     setActiveFloor(newId);
   };
 
-  React.useEffect(() => {
-    setPlannerMode("pending");
-  }, [isHome, isPlannerRoute]);
-  
-  const mainClasses = [
-    "mx-auto flex w-full flex-1 flex-col gap-8 px-4 pb-12 pt-8 sm:px-6 lg:px-10",
-    isHome ? "max-w-5xl" : "max-w-none",
-  ].join(" ");
-
   return (
-    <div className="flex min-h-screen flex-col bg-slate-950 text-slate-100">
-      <header className="flex flex-wrap items-center gap-4 border-b border-slate-800 px-4 py-4 sm:px-6 lg:px-10">
-        <div className="flex min-w-[200px] flex-1 items-center gap-3">
-          {!isHome && (
-            <Link
-              to="/"
-              aria-label="Back"
-              className="inline-flex h-9 w-9 items-center justify-center rounded-full border border-slate-800 text-slate-300 transition hover:border-slate-600 hover:text-white"
-            >
-              <ArrowLeft className="h-4 w-4" />
-            </Link>
+    <div className="flex h-screen flex-col bg-white text-gray-900">
+      {/* HEADER */}
+      <header className="flex-none border-b border-gray-200 bg-white px-4 py-3 sm:px-6 lg:px-8 z-50 shadow-sm relative">
+        <div className="flex items-center justify-between h-10">
+          {/* Left: Branding & Back Button */}
+          <div className="flex min-w-[100px] sm:min-w-[200px] items-center gap-4">
+            {!isHome && (
+              <Link
+                to="/"
+                aria-label="Back"
+                className="group inline-flex h-8 w-8 items-center justify-center rounded-full border border-gray-200 bg-gray-50 text-gray-500 transition hover:border-gray-300 hover:bg-white hover:text-gray-900 shadow-sm"
+              >
+                <ArrowLeft className="h-4 w-4 transition-transform group-hover:-translate-x-0.5" />
+              </Link>
+            )}
+            <div className="flex items-center gap-2.5">
+              <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-gray-900 text-white shadow-md">
+                <LayoutGrid className="h-4 w-4" />
+              </div>
+              <div className="leading-none hidden sm:block">
+                {" "}
+                {/* Hidden on mobile */}
+                <p className="text-[10px] font-bold uppercase tracking-widest text-gray-400">
+                  NeuroReserve
+                </p>
+                <p className="text-sm font-bold text-gray-900">
+                  {isHome
+                    ? "Dashboard"
+                    : isAdmin
+                    ? "Admin Portal"
+                    : "Client View"}
+                </p>
+              </div>
+            </div>
+          </div>
+
+          {/* Center: Floor Controls (Floating Pills) */}
+          {showFloorControls && (
+            <div className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2">
+              <div className="flex items-center gap-1 rounded-full border border-gray-200 bg-white p-0.5 shadow-sm max-w-[200px] sm:max-w-none overflow-x-auto no-scrollbar">
+                {floors.map((floor) => {
+                  const isActive = floor.id === activeFloorId;
+                  return (
+                    <button
+                      key={floor.id}
+                      type="button"
+                      onClick={() => setActiveFloor(floor.id)}
+                      className={[
+                        "inline-flex items-center rounded-full px-3 py-1 text-[10px] sm:text-[11px] font-semibold transition-all whitespace-nowrap",
+                        isActive
+                          ? "bg-emerald-500 text-white shadow-sm"
+                          : "text-gray-500 hover:bg-gray-50 hover:text-gray-900",
+                      ].join(" ")}
+                    >
+                      {floor.name}
+                    </button>
+                  );
+                })}
+                {isAdmin && (
+                  <button
+                    type="button"
+                    onClick={handleAddFloor}
+                    aria-label="Add floor"
+                    className="ml-0.5 inline-flex h-6 w-6 items-center justify-center rounded-full text-gray-400 transition hover:bg-gray-100 hover:text-emerald-600 flex-shrink-0"
+                  >
+                    <Plus className="h-3.5 w-3.5" />
+                  </button>
+                )}
+              </div>
+            </div>
           )}
-          <div>
-            <p className="text-sm uppercase tracking-[0.25em] text-slate-500">NeutroReserve</p>
-            <p className="text-lg font-semibold text-white">{headerTitle}</p>
+
+          {/* Right Spacer (for balance) */}
+          <div className="min-w-[100px] sm:min-w-[200px] flex justify-end">
+            {/* Optional: Add User Profile or Logout here */}
           </div>
         </div>
-        <div className="flex flex-1 justify-center">
-          {showFloorControls ? (
-            <div className="flex flex-wrap items-center gap-2 rounded-full border border-slate-800 bg-slate-900/80 px-4 py-2 text-xs text-slate-200 shadow">
-              {floors.map((floor) => {
-                const isActive = floor.id === activeFloorId;
-                return (
-                  <button
-                    key={floor.id}
-                    type="button"
-                    onClick={() => setActiveFloor(floor.id)}
-                    className={[
-                      "inline-flex items-center rounded-full border px-3 py-1 text-xs font-semibold transition",
-                      isActive
-                        ? "border-emerald-400 bg-emerald-500 text-slate-950"
-                        : "border-slate-700 text-slate-200 hover:border-emerald-400 hover:text-white",
-                    ].join(" ")}
-                  >
-                    {floor.name}
-                  </button>
-                );
-              })}
-              {isAdmin && (
-                <button
-                  type="button"
-                  onClick={handleAddFloor}
-                  aria-label="Add floor"
-                  className="inline-flex h-8 w-8 items-center justify-center rounded-full border border-slate-700 bg-slate-900 text-slate-200 transition hover:border-emerald-400 hover:text-white"
-                >
-                  <Plus className="h-4 w-4" />
-                </button>
-              )}
-            </div>
-          ) : null}
-        </div>
-        <div className="flex min-w-[160px] flex-1 justify-end">
-          {showNavLinks ? (
-            <nav className="flex items-center gap-2">
-              <Link
-                to="/reservation"
-                className={[
-                  "inline-flex items-center rounded-full border px-3 py-1 text-xs font-semibold transition",
-                  isPlannerRoute
-                    ? "border-emerald-400 bg-emerald-500 text-slate-950"
-                    : "border-slate-700 text-slate-200 hover:border-emerald-400 hover:text-white",
-                ].join(" ")}
-              >
-                Planner
-              </Link>
-              <Link
-                to="/reservations"
-                className={[
-                  "inline-flex items-center rounded-full border px-3 py-1 text-xs font-semibold transition",
-                  isReservationsRoute
-                    ? "border-emerald-400 bg-emerald-500 text-slate-950"
-                    : "border-slate-700 text-slate-200 hover:border-emerald-400 hover:text-white",
-                ].join(" ")}
-              >
-                Reservations
-              </Link>
-            </nav>
-          ) : (
-            <div className="text-xs uppercase tracking-[0.3em] text-slate-600">
-              Restaurant Suite
-            </div>
-          )}
-        </div>
       </header>
-      <main className={mainClasses}>
+
+      {/* MAIN CONTENT AREA */}
+      <main
+        className={[
+          "flex-1 w-full",
+          isPanel
+            ? "overflow-hidden relative bg-gray-50"
+            : "overflow-y-auto px-4 py-8 sm:px-6 lg:px-8 max-w-7xl mx-auto",
+        ].join(" ")}
+      >
         <Outlet />
       </main>
     </div>

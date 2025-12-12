@@ -1,6 +1,10 @@
 ﻿import React from "react";
 import { useStore } from "@tanstack/react-store";
+import { DraggableDivider } from "../components/Divider";
 import {
+  updateDivider,
+  deleteSelectedDivider,
+  addDivider,
   addChairToSelected,
   addTable,
   deleteSelectedTable,
@@ -9,19 +13,24 @@ import {
   selectTable,
   setChairsForSelected,
   setNameForSelected,
-  setPlannerMode,
   type PlannerMode,
   type Reservation,
   type Table,
+  saveClientReservations,
+  loadClientReservations,
 } from "../lib/demoStore";
+
 import {
-  ArrowLeft,
-  Grip,
   Trash2,
   UserMinus,
   UserPlus,
   UsersRound,
+  X,
+  Plus,
+  LayoutTemplate,
+  SeparatorHorizontal,
 } from "lucide-react";
+
 import {
   MAX_ZOOM,
   MIN_ZOOM,
@@ -30,8 +39,8 @@ import {
   WORLD_WIDTH,
   WORLD_HEIGHT,
 } from "../constants/reservationConst";
+
 import { DraggableTable } from "../components/Table";
-import { renderChairs } from "../components/renderChairs";
 import { useFloorData } from "../lib/useFloorData";
 import { useCanvas } from "../lib/useCanvas";
 
@@ -43,32 +52,49 @@ type ReservationRequest = {
   partySize: number;
 };
 
-type CanvasExtras = {
-  canvasStateByFloor?: Record<string, { pan: { x: number; y: number }; zoom: number }>;
-  mode?: PlannerMode | null;
-};
-
-
-
-function clampTablePosition(x: number, y: number) {
+// --- Helper: Clamp Table to World Bounds ---
+function clampTablePosition(
+  x: number,
+  y: number,
+  width: number = 120,
+  height: number = 80
+) {
   return {
-    x: Math.min(Math.max(0, x), WORLD_WIDTH - TABLE_SIZE),
-    y: Math.min(Math.max(0, y), WORLD_HEIGHT - TABLE_SIZE),
+    x: Math.min(Math.max(0, x), WORLD_WIDTH - width),
+    y: Math.min(Math.max(0, y), WORLD_HEIGHT - height),
   };
 }
 
 export default function ReservationPanelDemo() {
-  const [sidebarOpen, setSidebarOpen] = React.useState(false);
+  // --- Store & State ---
+  const dividers = useStore(demoStore, (state) => {
+    const activeFloor = state.floors.find((f) => f.id === state.activeFloorId);
+    return activeFloor?.dividers ?? [];
+  });
+  const [selectedDividerId, setSelectedDividerId] = React.useState<
+    string | null
+  >(null);
+  const mode = useStore(demoStore, (state) => state.mode);
   const [detailOpen, setDetailOpen] = React.useState(false);
   const canvasStatesRef = React.useRef<
     Record<string, { pan: { x: number; y: number }; zoom: number }>
   >({});
-  const { mode } = useStore(demoStore);
 
+  const clientIdFromUrl = React.useMemo(() => {
+    if (mode === "client") {
+      const pathParts = window.location.pathname.split("/");
+      const clientIndex = pathParts.indexOf("client");
+      if (clientIndex !== -1 && pathParts[clientIndex + 1]) {
+        return pathParts[clientIndex + 1];
+      }
+    }
+    return null;
+  }, [mode]);
+
+  // --- Canvas Logic ---
   const {
     canvasRef,
     interactionLayerRef,
-    canvasSize,
     zoom,
     pan,
     isPanning,
@@ -84,51 +110,34 @@ export default function ReservationPanelDemo() {
     screenToWorld,
   } = useCanvas();
 
-  const handleHydrate = React.useCallback(
-    (extras: CanvasExtras) => {
-      if (extras.canvasStateByFloor) {
-        canvasStatesRef.current = extras.canvasStateByFloor;
-      }
-      if (extras.mode === "admin" || extras.mode === "client") {
-        setPlannerMode(extras.mode);
-        setSidebarOpen(extras.mode === "admin");
-      } else if (extras.mode === null) {
-        setPlannerMode("pending");
-        setSidebarOpen(false);
-      }
-    },
-    [setSidebarOpen],
-  );
-
   const getExtras = React.useCallback(
     () => ({
       mode: mode === "pending" ? null : mode,
       canvasStateByFloor: { ...canvasStatesRef.current },
     }),
-    [mode],
+    [mode]
   );
 
-  const {
-    activeFloorId,
-    tables,
-    selectedId,
-    reservations,
-    setReservations,
-  } = useFloorData({
-    onHydrate: handleHydrate,
-    getExtras,
-  });
+  const { activeFloorId, tables, selectedId, reservations, setReservations } =
+    useFloorData({
+      getExtras,
+    });
 
+  const clientReservations = React.useMemo(() => {
+    if (mode === "client" && clientIdFromUrl) {
+      return loadClientReservations(clientIdFromUrl);
+    }
+    return reservations;
+  }, [mode, clientIdFromUrl, reservations]);
 
   const selectedTable = React.useMemo(
     () => tables.find((table) => table.id === selectedId) ?? null,
-    [tables, selectedId],
+    [tables, selectedId]
   );
 
+  // --- Effects ---
   React.useEffect(() => {
-    if (!activeFloorId) {
-      return;
-    }
+    if (!activeFloorId) return;
     selectTable(null);
     setDetailOpen(false);
     const snapshot = canvasStatesRef.current[activeFloorId];
@@ -137,172 +146,196 @@ export default function ReservationPanelDemo() {
       setPanState(snapshot.pan);
     } else {
       applyZoom(1);
-      setPanState({ x:0, y: 0});
+      setPanState({ x: 0, y: 0 });
     }
-  }, [activeFloorId, applyZoom, setDetailOpen, setPanState]);
+  }, [activeFloorId, applyZoom, setPanState]);
 
   React.useEffect(() => {
-    if (!activeFloorId) {
-      return;
-    }
+    if (!activeFloorId) return;
     canvasStatesRef.current[activeFloorId] = { pan, zoom };
   }, [activeFloorId, pan, zoom]);
 
   const isAdmin = mode === "admin";
 
-  React.useEffect(() => {
-    setPanState((prev) => prev);
-  }, [activeFloorId, canvasSize, zoom, setPanState]);
-
-  const handleModeSelect = (nextMode: Exclude<PlannerMode, "pending">) => {
-    setPlannerMode(nextMode);
-    setSidebarOpen(nextMode === "admin");
-    setDetailOpen(false);
-    selectTable(null);
-    handleZoomReset();
-  };
-
-  const handleCreateReservation = React.useCallback(
-    (request: ReservationRequest) => {
-      let created = false;
-      setReservations((prev) => {
-        const conflict = prev.some(
-          (reservation) =>
-            reservation.tableId === request.tableId &&
-            reservation.date === request.date &&
-            reservation.slot === request.slot,
-        );
-
-        if (conflict) {
-          return prev;
-        }
-
-        created = true;
-        const newReservation: Reservation = {
-          id:
-            typeof crypto !== "undefined" && "randomUUID" in crypto
-              ? crypto.randomUUID()
-              : `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
-          ...request,
-        };
-
-        return [...prev, newReservation];
-      });
-      return created;
-    },
-    [setReservations],
-  );
+  // --- Actions ---
 
   const handleAddTable = React.useCallback(() => {
-    if (!isAdmin || !activeFloorId) {
-      return;
+    if (!isAdmin || !activeFloorId) return;
+
+    let desired = { x: 100, y: 100 };
+    if (canvasRef.current) {
+      const rect = canvasRef.current.getBoundingClientRect();
+      if (rect.width > 0 && rect.height > 0) {
+        const centerWorld = screenToWorld({
+          x: rect.width / 2,
+          y: rect.height / 2,
+        });
+        desired = {
+          x: centerWorld.x - TABLE_SIZE / 2,
+          y: centerWorld.y - TABLE_SIZE / 2,
+        };
+      }
     }
-
-    if (canvasSize) {
-      const centerWorld = screenToWorld({
-        x: canvasSize.width / 2,
-        y: canvasSize.height / 2,
-      });
-      const desired = {
-        x: centerWorld.x - TABLE_SIZE / 2,
-        y: centerWorld.y - TABLE_SIZE / 2,
-      };
-      const clamped = clampTablePosition(desired.x, desired.y);
-      addTable({ x: clamped.x, y: clamped.y });
-      setDetailOpen(true);
-
-      return;
-    }
-
-    const canvas = canvasRef.current;
-    if (!canvas) {
-      addTable();
-      setDetailOpen(true);
-      return;
-    }
-
-    const rect = canvas.getBoundingClientRect();
-    const centerWorld = screenToWorld({
-      x: rect.width / 2,
-      y: rect.height / 2,
-    });
-
-    const desired = {
-      x: centerWorld.x - TABLE_SIZE / 2,
-      y: centerWorld.y - TABLE_SIZE / 2,
-    };
     const clamped = clampTablePosition(desired.x, desired.y);
     addTable({ x: clamped.x, y: clamped.y });
     setDetailOpen(true);
-  }, [activeFloorId, canvasRef, canvasSize, isAdmin, screenToWorld]);
+  }, [activeFloorId, canvasRef, isAdmin, screenToWorld]);
 
-  const toggleSidebar = React.useCallback(() => {
-    if (!isAdmin) return;
-    setSidebarOpen((prev) => !prev);
-  }, [isAdmin]);
+  const handleAddDivider = React.useCallback(() => {
+    if (!isAdmin || !activeFloorId) return;
 
-  if (mode === "pending") {
-    return (
-      <div className="-mx-4 flex h-full min-h-[560px] flex-1 flex-col items-center justify-center gap-8 sm:-mx-6 lg:-mx-10">
-        <div className="w-full max-w-2xl rounded-[32px] border border-slate-800 bg-slate-950/95 p-10 text-center shadow-2xl">
-          <h1 className="text-3xl font-semibold text-white">Choose how you want to use the planner</h1>
-          <p className="mt-4 text-sm text-slate-400">
-            Admin mode lets you design the floor plan. Client mode lets you browse tables just like a guest.
-          </p>
-          <div className="mt-10 flex flex-col items-center gap-4 sm:flex-row sm:justify-center">
+    let desired = { x: 150, y: 150 };
+    if (canvasRef.current) {
+      const rect = canvasRef.current.getBoundingClientRect();
+      if (rect.width > 0 && rect.height > 0) {
+        const centerWorld = screenToWorld({
+          x: rect.width / 2,
+          y: rect.height / 2,
+        });
+        desired = { x: centerWorld.x - 200, y: centerWorld.y - 40 };
+      }
+    }
+
+    addDivider({
+      x: desired.x,
+      y: desired.y,
+      width: 400,
+      height: 80,
+      name: "Area",
+    });
+  }, [activeFloorId, canvasRef, isAdmin, screenToWorld]);
+
+  const handleCreateReservation = React.useCallback(
+    (request: ReservationRequest) => {
+      const conflict = reservations.some(
+        (reservation) =>
+          reservation.tableId === request.tableId &&
+          reservation.date === request.date &&
+          reservation.slot === request.slot
+      );
+
+      if (conflict) return false;
+
+      const newReservation: Reservation = {
+        id: crypto.randomUUID(),
+        ...request,
+        clientId: clientIdFromUrl ?? undefined,
+      };
+
+      setReservations((prev) => [...prev, newReservation]);
+
+      if (clientIdFromUrl) {
+        const existingClientReservation =
+          loadClientReservations(clientIdFromUrl);
+        saveClientReservations(clientIdFromUrl, [
+          ...existingClientReservation,
+          newReservation,
+        ]);
+      }
+      return true;
+    },
+    [setReservations, reservations, clientIdFromUrl]
+  );
+
+  // --- Background Click Handler (Clears selection) ---
+  const handleBackgroundClick = (event: React.MouseEvent) => {
+    // Only deselect if we clicked directly on the background div
+    if (event.target === event.currentTarget) {
+      selectTable(null);
+      setDetailOpen(false);
+      setSelectedDividerId(null);
+    }
+  };
+
+  // --- Render ---
+  return (
+    // ADDED 'relative' to fix absolute positioning of side panel
+    <div className="relative flex h-full w-full flex-col md:flex-row gap-4 bg-white p-2 md:p-4 overflow-hidden">
+      {/* LEFT SIDEBAR - Responsive Height/Width */}
+      {isAdmin && (
+        <aside className="flex-none w-full md:w-56 flex flex-row md:flex-col gap-4 rounded-3xl bg-white p-4 shadow-[0_2px_15px_-3px_rgba(0,0,0,0.07)] border border-gray-100 z-20">
+          <div className="hidden md:block">
+            <h2 className="text-lg font-bold text-gray-800 tracking-tight">
+              Design Tools
+            </h2>
+            <p className="text-[11px] text-gray-400 mt-0.5 font-medium">
+              Drag & drop items
+            </p>
+          </div>
+
+          {/* Tools Grid */}
+          <div className="flex flex-1 md:flex-none flex-row md:flex-col gap-2 overflow-x-auto md:overflow-visible">
             <button
-              type="button"
-              onClick={() => handleModeSelect("admin")}
-              className="inline-flex w-full items-center justify-center rounded-full bg-emerald-500 px-6 py-3 text-sm font-semibold text-slate-950 transition hover:bg-emerald-400 sm:w-auto"
+              onClick={handleAddTable}
+              className="flex-1 group flex items-center justify-between rounded-lg border border-gray-100 bg-white px-3 py-2.5 shadow-sm transition-all hover:border-emerald-500 hover:shadow-md active:scale-95 whitespace-nowrap"
             >
-              Enter Admin Mode
+              <div className="flex flex-col items-start gap-0.5">
+                <span className="text-xs font-bold text-gray-700">Table</span>
+                <span className="text-[10px] text-gray-400 font-medium hidden md:block">
+                  4 Seater
+                </span>
+              </div>
+              <div className="h-1.5 w-1.5 rounded-full bg-emerald-500 md:ml-0 ml-2" />
             </button>
+
             <button
-              type="button"
-              onClick={() => handleModeSelect("client")}
-              className="inline-flex w-full items-center justify-center rounded-full border border-slate-700 px-6 py-3 text-sm font-semibold text-slate-200 transition hover:border-slate-500 hover:text-white sm:w-auto"
+              onClick={handleAddDivider}
+              className="flex-1 group flex items-center justify-between rounded-lg border border-gray-100 bg-white px-3 py-2.5 shadow-sm transition-all hover:border-blue-500 hover:shadow-md active:scale-95 whitespace-nowrap"
             >
-              Enter Client Mode
+              <div className="flex flex-col items-start gap-0.5">
+                <span className="text-xs font-bold text-gray-700">Area</span>
+                <span className="text-[10px] text-gray-400 font-medium hidden md:block">
+                  Zone / Floor
+                </span>
+              </div>
+              <div className="h-1.5 w-1.5 rounded-full bg-blue-500 md:ml-0 ml-2" />
             </button>
           </div>
-        </div>
-      </div>
-    );
-  }
 
-  return (
-    <div className="-mx-4 flex h-full min-h-0 flex-1 flex-col gap-6 sm:-mx-6 lg:-mx-10">
-      <div className="relative flex flex-1 overflow-hidden rounded-[32px] border border-slate-800 bg-slate-900">
-        <CanvasTools
-          open={sidebarOpen}
-          mode={mode}
-          onAddTable={handleAddTable}
-          onToggleSidebar={toggleSidebar}
-        />
+          <div className="hidden md:block mt-auto rounded-xl bg-gray-50 border border-gray-100 p-3">
+            <p className="text-[10px] uppercase tracking-wider text-gray-400 font-bold mb-2">
+              Instructions
+            </p>
+            <div className="text-[10px] text-gray-600 space-y-1.5 leading-relaxed">
+              <p>
+                <span className="font-bold text-gray-800">Double-click</span>{" "}
+                table to edit.
+              </p>
+              <p>
+                <span className="font-bold text-gray-800">Select Area</span> to
+                rename it.
+              </p>
+              <p>
+                <span className="font-bold text-gray-800">Drag</span> handles to
+                resize.
+              </p>
+            </div>
+          </div>
+        </aside>
+      )}
 
+      {/* CANVAS CONTAINER */}
+      <div className="relative flex-1 overflow-hidden rounded-2xl shadow-xl border border-gray-200">
         <div
           ref={canvasRef}
-          className="relative flex-1 min-h-0 w-full overflow-hidden rounded-[32px] border border-slate-800 bg-gradient-to-b from-slate-950 via-slate-950 to-slate-900"
-          onClick={(event) => {
-            if (event.target === event.currentTarget) {
-              selectTable(null);
-              setDetailOpen(false);
-            }
-          }}
+          className="relative h-full w-full overflow-hidden bg-white cursor-crosshair"
+          onClick={handleBackgroundClick} // Attach the fixed click handler here
         >
-          <div className="pointer-events-none absolute inset-0 z-0">
-            <div className="absolute inset-0 bg-[linear-gradient(90deg,_rgba(255,255,255,0.03)_1px,_transparent_1px),_linear-gradient(180deg,_rgba(255,255,255,0.03)_1px,_transparent_1px)] bg-[size:64px_64px]" />
-            <div className="absolute inset-0 bg-[radial-gradient(circle_at_center,_rgba(148,163,184,0.08),_transparent_55%)]" />
+          {/* Grid background */}
+          <div className="pointer-events-none absolute inset-0 z-0 opacity-[0.3]">
+            <div className="absolute inset-0 bg-[linear-gradient(90deg,#e2e8f0_1px,transparent_1px),linear-gradient(180deg,#e2e8f0_1px,transparent_1px)] bg-[size:40px_40px]" />
           </div>
 
+          {/* Interaction layer */}
           <div
             ref={interactionLayerRef}
-            className="absolute inset-0 z-10 touch-none"
+            className="absolute inset-0 z-10 pointer-events-none"
             onPointerDown={handleCanvasPointerDown}
             onPointerMove={handleCanvasPointerMove}
             onPointerUp={handleCanvasPointerUp}
             onPointerCancel={handleCanvasPointerUp}
             onPointerLeave={handleCanvasPointerLeave}
+            onClick={handleBackgroundClick}
             style={{
               cursor:
                 zoom > 1 || isPanning
@@ -312,177 +345,126 @@ export default function ReservationPanelDemo() {
                   : "default",
             }}
           >
+            {/* Inner World Border (Dark Grey) */}
             <div
-              className="absolute left-0 top-0 border border-white"
+              className="absolute left-0 top-0 border-[3px] border-gray-900 bg-white/20 shadow-2xl pointer-events-auto"
+              onClick={handleBackgroundClick}
               style={{
                 width: WORLD_WIDTH,
                 height: WORLD_HEIGHT,
                 transform: `translate(${pan.x}px, ${pan.y}px) scale(${zoom})`,
                 transformOrigin: "top left",
-                // willChange: "transform",
-                // backfaceVisibility: "hidden",
-                // boxShadow: "0 0 0 0 2px white",
+                willChange: "transform",
               }}
             >
+              {/* Dividers */}
+              {dividers.map((divider) => (
+                <DraggableDivider
+                  key={divider.id}
+                  divider={divider}
+                  zoom={zoom}
+                  onUpdate={updateDivider}
+                  onDelete={deleteSelectedDivider}
+                  isSelected={divider.id === selectedDividerId}
+                  onSelect={() => {
+                    // Only select if Admin
+                    if (isAdmin) {
+                      setSelectedDividerId(divider.id);
+                      selectTable(null);
+                    }
+                  }}
+                  isAdmin={isAdmin}
+                />
+              ))}
+
+              {/* Tables */}
               {tables.map((table) => (
                 <DraggableTable
                   key={table.id}
                   table={table}
                   mode={mode}
                   isSelected={table.id === selectedId}
+                  detailOpen={detailOpen}
                   onSelect={() => {
-                    if (isAdmin) {
-                      setDetailOpen(false);
-                    } else {
-                      setDetailOpen(true);
-                    }
+                    setSelectedDividerId(null);
+                    setDetailOpen(false);
                   }}
-                  onOpenDetail={() => setDetailOpen(true)}
+                  onOpenDetail={() => {
+                    setDetailOpen(true);
+                    setSelectedDividerId(null);
+                  }}
                   zoom={zoom}
-                  clampTablePosition={clampTablePosition}
+                  clampTablePosition={(x, y) =>
+                    clampTablePosition(x, y, table.width, table.height)
+                  }
                 />
               ))}
             </div>
           </div>
 
-          <div className="pointer-events-none absolute inset-0 z-20 flex items-start justify-between px-6 pt-6">
-            <div className="pointer-events-auto flex items-center gap-2 rounded-full border border-slate-800 bg-slate-900/80 px-3 py-1 text-xs text-slate-200 shadow">
-              <button
-                type="button"
-                onClick={handleZoomOut}
-                className="inline-flex h-7 w-7 items-center justify-center rounded-full border border-slate-700 bg-slate-900 text-slate-300 transition hover:border-slate-500 hover:text-white disabled:cursor-not-allowed disabled:opacity-40"
-                disabled={zoom <= MIN_ZOOM + 1e-6}
-              >
-                -
-              </button>
-              <span className="min-w-[3rem] text-center font-semibold tracking-wide">
-                {Math.round(zoom * 100)}%
-              </span>
+          {/* Zoom Controls */}
+          <div className="pointer-events-none absolute bottom-6 right-6 z-20 flex flex-col gap-3">
+            <div className="pointer-events-auto flex flex-col items-center overflow-hidden rounded-xl bg-white shadow-lg border border-gray-100">
               <button
                 type="button"
                 onClick={handleZoomIn}
-                className="inline-flex h-7 w-7 items-center justify-center rounded-full border border-slate-700 bg-slate-900 text-slate-300 transition hover:border-slate-500 hover:text-white disabled:cursor-not-allowed disabled:opacity-40"
+                className="flex h-10 w-10 items-center justify-center text-gray-800 hover:bg-gray-50 active:bg-gray-100 transition-colors"
                 disabled={zoom >= MAX_ZOOM - 1e-6}
               >
-                +
+                <Plus className="h-4 w-4" />
               </button>
+              <div className="flex h-8 w-10 items-center justify-center text-[10px] font-bold text-gray-900 border-y border-gray-100 cursor-default select-none">
+                {Math.round(zoom * 100)}%
+              </div>
               <button
                 type="button"
-                onClick={handleZoomReset}
-                className="inline-flex h-7 px-2 items-center justify-center rounded-full border border-slate-700 bg-slate-900 text-slate-300 transition hover:border-slate-500 hover:text-white"
+                onClick={handleZoomOut}
+                className="flex h-10 w-10 items-center justify-center text-gray-800 hover:bg-gray-50 active:bg-gray-100 transition-colors"
+                disabled={zoom <= MIN_ZOOM + 1e-6}
               >
-                Reset
+                <div className="h-0.5 w-3 bg-gray-800" />
               </button>
             </div>
-            <div className="flex items-center gap-3">
-              <div className="flex items-center gap-2 rounded-full border border-slate-800 bg-slate-900/70 px-3 py-1 text-[11px] text-slate-400">
-                <span className="inline-flex h-2 w-2 rounded-full bg-emerald-400" />
-                {isAdmin
-                  ? "Drag to move | Double-click to edit | Pinch or scroll to zoom"
-                  : "Tap a table to view details | Pinch or scroll to zoom"}
-              </div>
-            </div>
+
+            <button
+              type="button"
+              onClick={handleZoomReset}
+              className="pointer-events-auto rounded-lg bg-white px-3 py-2 text-[10px] font-bold text-gray-700 shadow-md border border-gray-100 hover:bg-gray-50 transition-colors"
+            >
+              Reset
+            </button>
           </div>
 
-          {tables.length === 0 && (
-            <div className="absolute left-1/2 top-1/2 z-30 w-[22rem] -translate-x-1/2 -translate-y-1/2 rounded-3xl border border-slate-800 bg-slate-900/85 p-6 text-center text-sm text-slate-300 shadow-lg backdrop-blur">
-              <p className="text-base font-semibold text-white">
-                {isAdmin ? "Ready to design tonight's floor?" : "Floor plan not published yet"}
+          {/* Empty state */}
+          {tables.length === 0 && dividers.length === 0 && (
+            <div className="absolute left-1/2 top-1/2 z-30 w-[80%] max-w-sm -translate-x-1/2 -translate-y-1/2 rounded-2xl bg-white/95 p-6 text-center shadow-xl backdrop-blur-sm border border-gray-200 pointer-events-none">
+              <p className="text-xl font-bold text-gray-900">
+                {isAdmin ? "Start Designing" : "Floor Plan Empty"}
               </p>
-              <p className="mt-2 text-slate-400">
+              <p className="mt-2 text-sm text-gray-600">
                 {isAdmin
-                  ? "Tap the table template to drop it in the center, then drag to place."
-                  : "Please reach out to the host for the latest layout or pick another room."}
+                  ? "Use the tools on the left to set up the floor."
+                  : "Please check back later."}
               </p>
             </div>
           )}
         </div>
       </div>
 
+      {/* Detail panel */}
       {detailOpen && selectedTable && (
-        <TableDetailSheet
-          table={selectedTable}
-          mode={mode}
-          reservations={reservations}
-          onCreateReservation={handleCreateReservation}
-          onClose={() => {
-            setDetailOpen(false);
-            selectTable(null);
-          }}
-        />
-      )}
-    </div>
-  );
-}
-
-function CanvasTools({
-  open,
-  mode,
-  onAddTable,
-  onToggleSidebar,
-}: {
-  open: boolean;
-  mode: PlannerMode;
-  onAddTable: () => void;
-  onToggleSidebar: () => void;
-}) {
-  if (mode !== "admin") {
-    return null;
-  }
-
-  return (
-    <div className="pointer-events-none absolute left-6 top-20 z-20">
-      <aside
-        className={[
-          "pointer-events-auto w-60 rounded-[28px] border border-slate-800 bg-slate-950/95 p-5 shadow-2xl transition duration-300",
-          open ? "translate-x-0 opacity-100" : "-translate-x-[130%] opacity-0 pointer-events-none",
-        ].join(" ")}
-      >
-        <div className="flex items-center justify-between">
-          <p className="text-xs uppercase tracking-[0.3em] text-slate-500">Tools</p>
-          <button
-            type="button"
-            onClick={onToggleSidebar}
-            className="inline-flex h-9 w-9 items-center justify-center rounded-full border border-slate-700 bg-slate-900 text-slate-300 transition hover:border-slate-500 hover:text-white"
-            aria-label="Collapse tools"
-          >
-            <ArrowLeft className="h-4 w-4" />
-          </button>
+        <div className="fixed inset-0 z-50 flex items-center justify-center md:items-stretch md:justify-end pointer-events-none">
+          <TableDetailSheet
+            table={selectedTable}
+            mode={mode}
+            reservations={clientReservations}
+            onCreateReservation={handleCreateReservation}
+            onClose={() => {
+              setDetailOpen(false);
+              selectTable(null);
+            }}
+          />
         </div>
-        <p className="mt-4 text-sm text-slate-300">
-          Drop a table into the room and fine-tune it after it lands.
-        </p>
-
-        <button
-          type="button"
-          onClick={onAddTable}
-          className="mt-6 flex w-full flex-col items-center gap-3 rounded-2xl border border-slate-800 bg-slate-900 p-5 text-slate-100 transition hover:border-slate-600 hover:text-white"
-        >
-          <div className="relative flex h-20 w-20 items-center justify-center rounded-2xl bg-slate-800"> 
-            <div className="flex h-14 w-14 items-center justify-center rounded-none border border-white/70 bg-slate-950/80 text-emerald-400">
-              <UsersRound className="h-6 w-6" />
-            </div>
-            {renderChairs(8, {
-              size: 64,
-              chairSize: 14,
-              offset: 42,
-            })}
-          </div>
-          <span className="text-xs uppercase tracking-[0.25em] text-slate-300">
-            Place Table
-          </span>
-        </button>
-      </aside>
-
-      {!open && (
-        <button
-          type="button"
-          onClick={onToggleSidebar}
-          className="pointer-events-auto absolute top-0 left-0 inline-flex h-11 w-11 items-center justify-center rounded-full border border-slate-700 bg-slate-900 text-slate-200 shadow-lg transition hover:border-slate-500 hover:text-white"
-          aria-label="Expand tools"
-        >
-          <Grip className="h-4 w-4" />
-        </button>
       )}
     </div>
   );
@@ -502,17 +484,33 @@ function TableDetailSheet({
   onClose: () => void;
 }) {
   const isAdmin = mode === "admin";
+
   if (isAdmin) {
-    return <AdminReservationSheet table={table} onClose={onClose} />;
+    // Admin gets the compact floating card in center
+    return (
+      <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 z-50">
+        <AdminReservationSheet table={table} onClose={onClose} />
+      </div>
+    );
   }
 
   return (
-    <ClientReservationSheet
-      table={table}
-      reservations={reservations}
-      onCreateReservation={onCreateReservation}
-      onClose={onClose}
-    />
+    <>
+      {/* mobile backdrop */}
+      <div
+        className="md:hidden fixed inset-0 bg-black/20 backdrop-blur-sm pointer-events-auto -z-10"
+        onClick={onClose}
+      />
+      {/* Detail panel */}
+      <div className="pointer-events-auto md:h-full w-[90%] md:w-[400px] h-auto max-h-[85%] md:max-h-full bg-white shadow-2xl rounded-2xl md:rounded-none md:rounded-l-2xl border-l border-gray-100 flex flex-col overflow-hidden animate-in zoom-in-95 md:slide-in-from-right duration-300">
+        <ClientReservationSheet
+          table={table}
+          reservations={reservations}
+          onCreateReservation={onCreateReservation}
+          onClose={onClose}
+        />
+      </div>
+    </>
   );
 }
 
@@ -521,6 +519,7 @@ type AdminReservationSheetProps = {
   onClose: () => void;
 };
 
+// COMPACT ADMIN CARD (Floating)
 function AdminReservationSheet({ table, onClose }: AdminReservationSheetProps) {
   const [chairInput, setChairInput] = React.useState<string>(
     table.chairs.toString()
@@ -539,30 +538,6 @@ function AdminReservationSheet({ table, onClose }: AdminReservationSheetProps) {
     setNameInput(nextName);
   }, []);
 
-  const handleSeatChange = (event: React.ChangeEvent<HTMLInputElement>) => {
-    const value = event.target.value;
-    if (/^\d*$/.test(value)) {
-      setChairInput(value);
-      const parsed = Number.parseInt(value, 10);
-      if (!Number.isNaN(parsed)) {
-        setChairsForSelected(parsed);
-      }
-    }
-  };
-
-  const handleSeatBlur = () => {
-    const parsed = Number.parseInt(chairInput, 10);
-    if (Number.isNaN(parsed)) {
-      setChairInput(table.chairs.toString());
-    } else {
-      setChairsForSelected(parsed);
-    }
-  };
-
-  const handleNameChange = (event: React.ChangeEvent<HTMLInputElement>) => {
-    setNameInput(event.target.value);
-  };
-
   const handleNameBlur = () => {
     commitName(nameInput);
   };
@@ -572,103 +547,68 @@ function AdminReservationSheet({ table, onClose }: AdminReservationSheetProps) {
       event.preventDefault();
       commitName(nameInput);
       (event.currentTarget as HTMLInputElement).blur();
-    } else if (event.key === "Escape") {
-      event.preventDefault();
-      setNameInput(table.name);
-      (event.currentTarget as HTMLInputElement).blur();
     }
   };
 
   return (
-    <div className="fixed inset-0 z-40 flex items-center justify-end bg-black/40 px-4 py-8 sm:px-8">
-      <div
-        className="absolute inset-0"
-        role="presentation"
-        onClick={onClose}
-      />
-      <div className="relative z-10 w-full max-w-sm rounded-3xl border border-slate-800 bg-slate-900 p-6 shadow-xl max-h-[calc(100vh-4rem)] overflow-y-auto">
-        <div className="flex items-start justify-between gap-4">
-          <div className="flex flex-1 flex-col gap-2">
-            <p className="text-xs uppercase tracking-[0.3em] text-slate-500">
-              Table Focus
-            </p>
-            <input
-              type="text"
-              value={nameInput}
-              onChange={handleNameChange}
-              onBlur={handleNameBlur}
-              onKeyDown={handleNameKeyDown}
-              className="w-full rounded-xl border border-slate-700 bg-slate-950 px-3 py-2 text-sm font-semibold text-white transition focus:border-emerald-500 focus:outline-none focus:ring-1 focus:ring-emerald-500/40"
-              placeholder="Table name"
-            />
-            <p className="text-xs text-slate-500">
-              {Math.round(table.x)}, {Math.round(table.y)} | {table.chairs} seats
-            </p>
-          </div>
+    <div className="w-[300px] rounded-2xl bg-white p-5 shadow-[0_10px_40px_-10px_rgba(0,0,0,0.2)] border border-gray-100 flex flex-col gap-4 animate-in fade-in zoom-in-95 duration-200">
+      <div className="flex items-center justify-between">
+        <span className="text-[10px] font-bold uppercase tracking-wider text-gray-400">
+          Table Focus
+        </span>
+        <div className="flex gap-2">
           <button
-            type="button"
             onClick={deleteSelectedTable}
-            className="inline-flex h-10 w-10 items-center justify-center rounded-xl border border-slate-700 text-slate-300 transition hover:border-red-500/60 hover:text-red-400"
-            aria-label="Delete table"
+            className="h-7 w-7 rounded-full bg-red-50 text-red-500 hover:bg-red-100 flex items-center justify-center transition"
           >
-            <Trash2 className="h-4 w-4" />
+            <Trash2 className="h-3.5 w-3.5" />
+          </button>
+          <button
+            onClick={onClose}
+            className="h-7 w-7 rounded-full bg-gray-50 text-gray-500 hover:bg-gray-100 flex items-center justify-center transition"
+          >
+            <X className="h-3.5 w-3.5" />
           </button>
         </div>
+      </div>
 
-        <div className="mt-6 flex justify-center">
-          <div className="relative flex h-32 w-32 items-center justify-center rounded-2xl border border-slate-800 bg-slate-950">
-            {renderChairs(table.chairs, {
-              size: 82,
-              chairSize: 16,
-              offset: 50,
-            })}
-          </div>
+      <div>
+        <input
+          type="text"
+          value={nameInput}
+          onChange={(e) => setNameInput(e.target.value)}
+          onBlur={handleNameBlur}
+          onKeyDown={handleNameKeyDown}
+          className="w-full text-xl font-bold text-gray-900 focus:outline-none border-b border-transparent focus:border-emerald-500 placeholder-gray-300 pb-1"
+          placeholder="Table Name"
+          autoFocus
+        />
+      </div>
+
+      <div className="flex items-center gap-3 bg-gray-50 rounded-xl p-2 border border-gray-100">
+        <button
+          onClick={removeChairFromSelected}
+          disabled={table.chairs <= 1}
+          className="h-8 w-8 rounded-lg bg-white shadow-sm border border-gray-100 text-gray-600 flex items-center justify-center hover:bg-gray-100 disabled:opacity-50"
+        >
+          <UserMinus className="h-4 w-4" />
+        </button>
+        <div className="flex-1 text-center">
+          <span className="text-lg font-bold text-gray-800">{chairInput}</span>
+          <span className="text-[10px] text-gray-400 block -mt-1">Seats</span>
         </div>
-
-        <div className="mt-6 space-y-3">
-          <label className="text-xs font-semibold uppercase tracking-[0.3em] text-slate-500">
-            Seat Count
-          </label>
-          <div className="flex items-center gap-2">
-            <button
-              type="button"
-              onClick={removeChairFromSelected}
-              className="inline-flex h-10 w-10 items-center justify-center rounded-xl border border-slate-700 text-slate-300 transition hover:border-slate-500 hover:text-white disabled:cursor-not-allowed disabled:opacity-40"
-              disabled={table.chairs === 0}
-              aria-label="Remove seat"
-            >
-              <UserMinus className="h-4 w-4" />
-            </button>
-
-            <div className="flex flex-1 items-center gap-2 rounded-xl border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-200">
-              <UsersRound className="h-4 w-4 text-slate-500" />
-              <input
-                type="text"
-                inputMode="numeric"
-                pattern="[0-9]*"
-                value={chairInput}
-                onChange={handleSeatChange}
-                onBlur={handleSeatBlur}
-                className="w-full bg-transparent text-sm text-slate-100 focus:outline-none"
-                placeholder="0"
-              />
-            </div>
-
-            <button
-              type="button"
-              onClick={addChairToSelected}
-              className="inline-flex h-10 w-10 items-center justify-center rounded-xl border border-slate-700 text-slate-300 transition hover:border-slate-500 hover:text-white"
-              aria-label="Add seat"
-            >
-              <UserPlus className="h-4 w-4" />
-            </button>
-          </div>
-        </div>
+        <button
+          onClick={addChairToSelected}
+          className="h-8 w-8 rounded-lg bg-emerald-500 shadow-sm border border-emerald-600 text-white flex items-center justify-center hover:bg-emerald-600"
+        >
+          <UserPlus className="h-4 w-4" />
+        </button>
       </div>
     </div>
   );
 }
 
+// CLIENT FORM COMPONENT
 type ClientReservationSheetProps = {
   table: Table;
   reservations: Reservation[];
@@ -685,10 +625,11 @@ function ClientReservationSheet({
   const todayIso = React.useMemo(() => {
     const today = new Date();
     today.setDate(today.getDate());
-    today.setHours(today.getHours() -  today.getTimezoneOffset() / 60);
-    return today.toISOString().slice(0, 10);  
+    today.setHours(today.getHours() - today.getTimezoneOffset() / 60);
+    return today.toISOString().slice(0, 10);
   }, []);
-  const [reservationDate, setReservationDate] = React.useState<string>(todayIso);
+  const [reservationDate, setReservationDate] =
+    React.useState<string>(todayIso);
   const [selectedSlot, setSelectedSlot] = React.useState<string | null>(null);
   const [guestName, setGuestName] = React.useState("");
   const [partySize, setPartySize] = React.useState(() =>
@@ -710,68 +651,21 @@ function ClientReservationSheet({
   const reservationsForDate = React.useMemo(
     () =>
       reservations.filter(
-        (reservation) =>
-          reservation.tableId === table.id &&
-          reservation.date === reservationDate
+        (r) => r.tableId === table.id && r.date === reservationDate
       ),
     [reservations, table.id, reservationDate]
   );
 
-  const upcomingReservations = React.useMemo(() => {
-    return reservations
-      .filter((reservation) => reservation.tableId === table.id && reservation.date >= todayIso)
-  }, [reservations, table.id]);
-
   const slotIsUnavailable = React.useCallback(
-    (slot: string) =>
-      reservationsForDate.some((reservation) => reservation.slot === slot),
+    (slot: string) => reservationsForDate.some((r) => r.slot === slot),
     [reservationsForDate]
   );
 
-  const handleDateChange = (event: React.ChangeEvent<HTMLInputElement>) => {
-    const next = event.target.value;
-    if (next !== todayIso) {
-      setReservationDate(next);
-      setSelectedSlot(null);
-      setFeedback({
-        type: "error",
-        message: "Reservations are limited to today.",
-      });
-      return;
-    }
-
-    setReservationDate(todayIso);
-    setSelectedSlot(null);
-  };
-
   const handleReserve = () => {
-    if (!guestName.trim()) {
-      setFeedback({
-        type: "error",
-        message: "Please provide a contact name.",
-      });
+    if (!guestName.trim() || !selectedSlot) {
+      setFeedback({ type: "error", message: "Missing details" });
       return;
     }
-
-    if (!selectedSlot) {
-      setFeedback({
-        type: "error",
-        message: "Select a seating time.",
-      });
-      return;
-    }
-
-    const now = new Date();
-    console.log("This is the Date:", now)
-    const selectedDateTime = new Date(`${reservationDate}T${selectedSlot}:00`);
-    if (selectedDateTime < now) {
-      setFeedback({
-        type: "error",
-        message: "Please choose a time in .",
-      });
-      return;
-    }
-
     const success = onCreateReservation({
       tableId: table.id,
       date: reservationDate,
@@ -779,195 +673,117 @@ function ClientReservationSheet({
       name: guestName.trim(),
       partySize,
     });
-
     if (success) {
-      setFeedback({
-        type: "success",
-        message: "Reservation confirmed. We look forward to hosting you!",
-      });
+      setFeedback({ type: "success", message: "Confirmed!" });
       setSelectedSlot(null);
       setGuestName("");
       setPartySize(Math.max(1, table.chairs));
     } else {
-      setFeedback({
-        type: "error",
-        message: "Just missed it! That slot was taken—please choose another.",
-      });
+      setFeedback({ type: "error", message: "Slot taken." });
     }
   };
 
   return (
-    <div className="fixed inset-0 z-40 flex items-center justify-end bg-black/40 px-4 py-8 sm:px-8">
-      <div
-        className="absolute inset-0"
-        role="presentation"
-        onClick={onClose}
-      />
-      <div className="relative z-10 w-full max-w-sm rounded-3xl border border-slate-800 bg-slate-900 p-6 shadow-xl max-h-[calc(100vh-4rem)] overflow-y-auto">
-        <div className="flex flex-col gap-2">
-          <p className="text-xs uppercase tracking-[0.3em] text-slate-500">
-            Table Focus
-          </p>
+    <div className="h-full w-full bg-white p-6 flex flex-col gap-6 overflow-hidden">
+      <div className="flex items-center justify-between flex-shrink-0">
+        <div>
+          <h2 className="text-2xl font-bold text-gray-900">{table.name}</h2>
+          <div className="flex items-center gap-2 mt-1">
+            <UsersRound className="h-4 w-4 text-emerald-600" />
+            <span className="text-sm font-medium text-gray-600">
+              {table.chairs} Seats
+            </span>
+          </div>
+        </div>
+        <button
+          onClick={onClose}
+          className="h-8 w-8 rounded-full bg-gray-50 text-gray-500 hover:bg-gray-100 flex items-center justify-center"
+        >
+          <X className="h-4 w-4" />
+        </button>
+      </div>
+
+      <div className="space-y-6 overflow-y-auto flex-1 min-h-0 pr-1">
+        <div className="space-y-2">
+          <label className="text-xs font-bold text-gray-400 uppercase tracking-wider">
+            Details
+          </label>
+          <div className="grid grid-cols-2 gap-4">
+            <input
+              type="date"
+              value={reservationDate}
+              min={todayIso}
+              onChange={(e) => setReservationDate(e.target.value)}
+              className="w-full text-sm font-semibold bg-gray-50 border border-gray-200 rounded-xl px-3 py-3"
+            />
+            <input
+              type="number"
+              min={1}
+              max={table.chairs}
+              value={partySize}
+              onChange={(e) => setPartySize(parseInt(e.target.value) || 1)}
+              className="w-full text-sm font-semibold bg-gray-50 border border-gray-200 rounded-xl px-3 py-3"
+              placeholder="Guests"
+            />
+          </div>
+        </div>
+
+        <div className="space-y-2">
+          <label className="text-xs font-bold text-gray-400 uppercase tracking-wider">
+            Contact
+          </label>
           <input
             type="text"
-            value={table.name}
-            readOnly
-            className="w-full cursor-default rounded-xl border border-slate-700 bg-slate-900/70 px-3 py-2 text-sm font-semibold text-slate-300"
+            value={guestName}
+            onChange={(e) => setGuestName(e.target.value)}
+            className="w-full text-sm bg-gray-50 border border-gray-200 rounded-xl px-4 py-3 font-medium"
+            placeholder="Guest Name"
           />
-          <p className="text-xs text-slate-500">
-            {Math.round(table.x)}, {Math.round(table.y)} | {table.chairs} seats
-          </p>
         </div>
 
-        <div className="mt-6 flex justify-center">
-          <div className="relative flex h-32 w-32 items-center justify-center rounded-2xl border border-slate-800 bg-slate-950">
-            {renderChairs(table.chairs, {
-              size: 82,
-              chairSize: 16,
-              offset: 50,
-            })}
-          </div>
-        </div>
-
-        <div className="mt-6 space-y-6">
-          <div className="rounded-2xl border border-slate-800 bg-slate-950 px-4 py-3 text-sm text-slate-300">
-            <div className="flex items-center gap-2">
-              <UsersRound className="h-4 w-4 text-slate-500" />
-              <span>{table.chairs} seats available</span>
-            </div>
-          </div>
-
-          <div className="space-y-4">
-            <div className="space-y-2">
-              <label className="text-xs uppercase tracking-[0.3em] text-slate-500">
-                Reservation Name
-              </label>
-              <input
-                type="text"
-                value={guestName}
-                onChange={(event) => setGuestName(event.target.value)}
-                className="w-full rounded-xl border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-white transition focus:border-emerald-500 focus:outline-none focus:ring-1 focus:ring-emerald-500/40"
-                placeholder="Who should we expect?"
-              />
-            </div>
-
-            <div className="grid gap-3 sm:grid-cols-2">
-              <div className="space-y-2">
-                <label className="text-xs uppercase tracking-[0.3em] text-slate-500">
-                  Party Size
-                </label>
-                <input
-                  type="number"
-                  min={1}
-                  max={table.chairs}
-                  value={partySize}
-                  onChange={(event) => {
-                    const value = Number.parseInt(event.target.value, 10);
-                    if (Number.isNaN(value)) {
-                      setPartySize(1);
-                      return;
-                    }
-                    setPartySize(Math.max(1, Math.min(table.chairs, value)));
-                  }}
-                  className="w-full rounded-xl border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-white transition focus:border-emerald-500 focus:outline-none focus:ring-1 focus:ring-emerald-500/40"
-                />
-              </div>
-              <div className="space-y-2">
-                <label className="text-xs uppercase tracking-[0.3em] text-slate-500">
-                  Date
-                </label>
-                <input
-                  type="date"
-                  value={reservationDate}
-                  min={todayIso}
-                  // max={todayIso}
-                  onChange={handleDateChange}
-                  className="w-full rounded-xl border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-white transition focus:border-emerald-500 focus:outline-none focus:ring-1 focus:ring-emerald-500/40"
-                />
-              </div>
-            </div>
-
-            <div className="space-y-2">
-              <p className="text-xs uppercase tracking-[0.3em] text-slate-500">
-                Time
-              </p>
-              <div className="grid grid-cols-3 gap-2">
-                {TIME_SLOTS.map((slot) => {
-                  const booked = slotIsUnavailable(slot);
-                  const selected = selectedSlot === slot;
-                  return (
-                    <button
-                      key={slot}
-                      type="button"
-                      onClick={() => {
-                        if (booked) return;
-                        setSelectedSlot(slot);
-                        setFeedback(null);
-                      }}
-                      disabled={booked}
-                      className={[
-                        "rounded-xl border px-3 py-2 text-sm transition",
-                        booked
-                          ? "cursor-not-allowed border-slate-800 text-slate-500 opacity-50"
-                          : selected
-                          ? "border-emerald-400 bg-emerald-500 text-slate-950"
-                          : "border-slate-700 text-slate-200 hover:border-emerald-400",
-                      ].join(" ")}
-                    >
-                      {slot}
-                    </button>
-                  );
-                })}
-              </div>
-            </div>
-
-            {feedback && (
-              <div
-                className={[
-                  "rounded-xl border px-4 py-3 text-sm",
-                  feedback.type === "success"
-                    ? "border-emerald-500/60 bg-emerald-500/10 text-emerald-200"
-                    : "border-red-500/60 bg-red-500/10 text-red-200",
-                ].join(" ")}
+        <div className="space-y-2">
+          <label className="text-xs font-bold text-gray-400 uppercase tracking-wider">
+            Select Time
+          </label>
+          <div className="grid grid-cols-3 gap-2 pb-2">
+            {TIME_SLOTS.map((slot) => (
+              <button
+                key={slot}
+                disabled={slotIsUnavailable(slot)}
+                onClick={() => setSelectedSlot(slot)}
+                className={`py-2 text-xs font-bold rounded-lg transition ${
+                  selectedSlot === slot
+                    ? "bg-emerald-500 text-white shadow-md transform scale-105"
+                    : slotIsUnavailable(slot)
+                    ? "bg-gray-50 text-gray-300 line-through"
+                    : "bg-white border border-gray-200 text-gray-600 hover:border-emerald-500"
+                }`}
               >
-                {feedback.message}
-              </div>
-            )}
-
-            <button
-              type="button"
-              onClick={handleReserve}
-              className="inline-flex w-full items-center justify-center rounded-full bg-emerald-500 px-6 py-3 text-sm font-semibold text-slate-950 transition hover:bg-emerald-400"
-            >
-              Reserve Table
-            </button>
+                {slot}
+              </button>
+            ))}
           </div>
-
-          {upcomingReservations.length > 0 && (
-            <div className="space-y-2 rounded-2xl border border-slate-800 bg-slate-950 px-4 py-3">
-              <p className="text-xs uppercase tracking-[0.3em] text-slate-500">
-                Upcoming Bookings
-              </p>
-              <ul className="space-y-2 text-sm text-slate-300">
-                {upcomingReservations.map((reservation) => (
-                  <li
-                    key={reservation.id}
-                    className="flex items-center justify-between rounded-xl border border-slate-800 px-3 py-2"
-                  >
-                    <span>
-                      {reservation.date} · {reservation.slot}
-                    </span>
-                    <span className="text-slate-500">
-                      {reservation.name} · {reservation.partySize} guests
-                    </span>
-                  </li>
-                ))}
-              </ul>
-            </div>
-          )}
         </div>
+
+        {feedback && (
+          <div
+            className={`text-center text-sm font-bold py-2 rounded-lg ${
+              feedback.type === "success"
+                ? "bg-emerald-50 text-emerald-600"
+                : "bg-red-50 text-red-500"
+            }`}
+          >
+            {feedback.message}
+          </div>
+        )}
       </div>
+
+      <button
+        onClick={handleReserve}
+        className="w-full bg-gray-900 text-white text-base font-bold py-4 rounded-xl hover:bg-black transition shadow-lg mt-auto flex-shrink-0"
+      >
+        Confirm Reservation
+      </button>
     </div>
   );
 }
-

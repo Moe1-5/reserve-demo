@@ -1,16 +1,13 @@
 import React from "react";
-import Draggable from "react-draggable";
-import type { DraggableData, DraggableEvent } from "react-draggable";
+import { RotateCw } from "lucide-react";
+import type { Table } from "../lib/demoStore";
+import type { PlannerMode } from "../lib/demoStore";
 import {
   selectTable,
   updateTablePosition,
-  type PlannerMode,
-  type Table,
+  rotateSelectedTable,
 } from "../lib/demoStore";
-import { TABLE_BOUNDS } from "../constants/reservationConst";
 import { renderChairs } from "./renderChairs";
-
-type ClampFn = (x: number, y: number) => { x: number; y: number };
 
 type DraggableTableProps = {
   table: Table;
@@ -19,7 +16,8 @@ type DraggableTableProps = {
   onSelect: () => void;
   onOpenDetail: () => void;
   zoom: number;
-  clampTablePosition: ClampFn;
+  clampTablePosition: (x: number, y: number) => { x: number; y: number };
+  detailOpen: boolean;
 };
 
 export function DraggableTable({
@@ -30,112 +28,146 @@ export function DraggableTable({
   onOpenDetail,
   zoom,
   clampTablePosition,
+  detailOpen,
 }: DraggableTableProps) {
-  const nodeRef = React.useRef<HTMLDivElement>(null);
   const [isDragging, setIsDragging] = React.useState(false);
-  const [position, setPosition] = React.useState({ x: table.x, y: table.y });
+  const [isHovering, setIsHovering] = React.useState(false);
+  const dragStartRef = React.useRef<{ x: number; y: number } | null>(null);
+
   const isAdmin = mode === "admin";
-  const isClient = mode === "client";
+  const tableColor = table.color || "#54a065";
 
-  React.useEffect(() => {
-    const clamped = clampTablePosition(table.x, table.y);
-    setPosition(clamped);
-    if (clamped.x !== table.x || clamped.y !== table.y) {
-      updateTablePosition(table.id, clamped.x, clamped.y);
-    }
-  }, [clampTablePosition, table.id, table.x, table.y]);
+  const handlePointerDown = (event: React.PointerEvent) => {
+    if (!isAdmin) return;
 
-  const handleStart = React.useCallback(
-    (event: DraggableEvent) => {
-      void event;
-      if (!isAdmin) {
-        return false;
-      }
-      onSelect();
-      selectTable(table.id);
-      setIsDragging(true);
-      return undefined;
-    },
-    [isAdmin, onSelect, table.id],
-  );
+    event.stopPropagation();
+    selectTable(table.id);
+    onSelect();
 
-  const handleStop = React.useCallback(
-    (_event: DraggableEvent, data: DraggableData) => {
-      const clamped = clampTablePosition(data.x, data.y);
-      setPosition(clamped);
-      updateTablePosition(table.id, clamped.x, clamped.y);
+    dragStartRef.current = {
+      x: event.clientX / zoom - table.x,
+      y: event.clientY / zoom - table.y,
+    };
+
+    setIsDragging(true);
+    (event.target as HTMLElement).setPointerCapture(event.pointerId);
+  };
+
+  const handlePointerMove = (event: React.PointerEvent) => {
+    if (!isDragging || !dragStartRef.current) return;
+
+    const worldX = event.clientX / zoom - dragStartRef.current.x;
+    const worldY = event.clientY / zoom - dragStartRef.current.y;
+
+    const clamped = clampTablePosition(worldX, worldY);
+    updateTablePosition(table.id, clamped.x, clamped.y);
+  };
+
+  const handlePointerUp = (event: React.PointerEvent) => {
+    if (isDragging) {
       setIsDragging(false);
-    },
-    [clampTablePosition, table.id],
-  );
+      dragStartRef.current = null;
+      (event.target as HTMLElement).releasePointerCapture(event.pointerId);
+    }
+  };
 
-  const handleDrag = React.useCallback(
-    (_event: DraggableEvent, data: DraggableData) => {
-      const clamped = clampTablePosition(data.x, data.y);
-      setPosition(clamped);
-    },
-    [clampTablePosition],
-  );
+  // --- UPDATED CLICK LOGIC ---
+  const handleClick = (event: React.MouseEvent) => {
+    event.stopPropagation();
 
-  const handleClick = React.useCallback(
-    (event: React.MouseEvent<HTMLDivElement>) => {
-      event.stopPropagation();
-      selectTable(table.id);
-      onSelect();
-      if (isClient) {
-        onOpenDetail();
-      }
-    },
-    [isClient, onOpenDetail, onSelect, table.id],
-  );
-
-  const handleDoubleClick = React.useCallback(
-    (event: React.MouseEvent<HTMLDivElement>) => {
-      if (!isAdmin) {
-        return;
-      }
-      event.stopPropagation();
+    // Client: Open panel immediately on single click
+    if (!isAdmin) {
       selectTable(table.id);
       onOpenDetail();
-    },
-    [isAdmin, onOpenDetail, table.id],
-  );
+      return;
+    }
 
-  const stateClass = isDragging
-    ? "scale-105 opacity-90 ring-2 ring-emerald-400/80 cursor-grabbing"
-    : isSelected
-    ? "ring-2 ring-emerald-400/70 cursor-grab"
-    : isAdmin
-    ? "cursor-grab hover:ring-2 hover:ring-white/40"
-    : "cursor-pointer hover:ring-2 hover:ring-white/20";
+    // Admin: Toggle focus logic
+    selectTable(table.id);
+    onOpenDetail();
+  };
+
+  const handleDoubleClick = (event: React.MouseEvent) => {
+    if (!isAdmin) return;
+    event.stopPropagation();
+    selectTable(table.id);
+    onOpenDetail();
+  };
+
+  const handleRotateClick = (event: React.MouseEvent) => {
+    event.stopPropagation();
+    selectTable(table.id);
+    rotateSelectedTable();
+  };
 
   return (
-    <Draggable
-      nodeRef={nodeRef}
-      position={position}
-      onStart={handleStart}
-      onDrag={handleDrag}
-      onStop={handleStop}
-      disabled={!isAdmin}
-      bounds={isAdmin ? TABLE_BOUNDS : undefined}
-      scale={zoom}
+    <div
+      data-table-node="true"
+      className="absolute pointer-events-auto"
+      style={{
+        left: table.x,
+        top: table.y,
+        width: table.width,
+        height: table.height,
+        transform: `rotate(${table.rotation}deg)`,
+        transformOrigin: "center center",
+      }}
+      onPointerDown={handlePointerDown}
+      onPointerMove={handlePointerMove}
+      onPointerUp={handlePointerUp}
+      onPointerCancel={handlePointerUp}
+      onClick={handleClick}
+      onDoubleClick={handleDoubleClick}
+      onMouseEnter={() => setIsHovering(true)}
+      onMouseLeave={() => setIsHovering(false)}
     >
       <div
-        ref={nodeRef}
         className={[
-          "absolute flex h-24 w-24 items-center justify-center rounded-none border border-white/80 text-sm font-semibold text-slate-950 shadow-lg transition-colors",
-          stateClass,
+          "relative flex h-full w-full items-center justify-center rounded-md text-sm font-semibold transition-all",
+          isSelected
+            ? `shadow-[0_0_0_2px_#3b82f6] z-10`
+            : "shadow-sm hover:shadow-md",
+          isDragging
+            ? "cursor-grabbing"
+            : isAdmin
+            ? "cursor-grab"
+            : "cursor-pointer",
         ].join(" ")}
-        style={{ backgroundColor: table.color }}
-        onClick={handleClick}
-        onDoubleClick={handleDoubleClick}
-        data-table-node="true"
-        role="button"
-        tabIndex={0}
+        style={{
+          backgroundColor: tableColor,
+          color: "white",
+        }}
       >
-        {table.name}
-        {renderChairs(table.chairs)}
+        <span
+          className="select-none text-white drop-shadow-sm pointer-events-none"
+          style={{
+            transform: `rotate(-${table.rotation}deg)`,
+          }}
+        >
+          {table.name}
+        </span>
+
+        {isAdmin && (isHovering || isSelected) && (
+          <button
+            type="button"
+            onClick={handleRotateClick}
+            className="absolute -right-3 -top-3 inline-flex h-6 w-6 items-center justify-center rounded-full border border-gray-200 bg-white text-gray-600 shadow-sm transition hover:bg-gray-50 hover:text-gray-900 z-20"
+            aria-label="Rotate table"
+            style={{
+              transform: `rotate(-${table.rotation}deg)`,
+            }}
+          >
+            <RotateCw className="h-3 w-3" />
+          </button>
+        )}
       </div>
-    </Draggable>
+
+      {renderChairs(table.chairs, tableColor, {
+        tableWidth: table.width,
+        tableHeight: table.height,
+        chairSize: 22,
+        offset: 32,
+      })}
+    </div>
   );
 }

@@ -3,7 +3,8 @@
 @tailwind utilities;
 
 :root {
-  color-scheme: dark;
+  /* Switched to Light Scheme */
+  color-scheme: light; 
   font-synthesis: none;
   text-rendering: optimizeLegibility;
   -webkit-font-smoothing: antialiased;
@@ -12,10 +13,11 @@
 
 @layer base {
   body {
-    @apply min-h-screen bg-slate-950 text-slate-100 antialiased;
+    /* Main App Background is now White */
+    @apply min-h-screen bg-white text-gray-950 antialiased selection:bg-emerald-100 selection:text-emerald-900;
   }
 
   #root {
-    @apply min-h-screen;
+    @apply h-screen flex flex-col;
   }
 }
